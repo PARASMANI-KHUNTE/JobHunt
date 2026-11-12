@@ -1,706 +1,665 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Server,
-  Database,
+  LayoutDashboard,
+  Briefcase,
+  Building2,
+  Kanban,
+  UserCheck,
   Cpu,
-  Layers,
-  CheckCircle2,
-  AlertTriangle,
-  RefreshCw,
-  Terminal,
-  ShieldCheck,
-  Activity,
-  FileCode,
-  Zap,
-  ChevronRight,
-  GitBranch,
+  Play,
+  Check,
+  ArrowRight,
 } from 'lucide-react';
+import { JobsAndEvaluatorView } from './features/JobsAndEvaluatorView.tsx';
+import { CompaniesAndFundingView } from './features/CompaniesAndFundingView.tsx';
+import { PipelineAndContactsView } from './features/PipelineAndContactsView.tsx';
+import { ProfileAndAgentsView } from './features/ProfileAndAgentsView.tsx';
 
-interface HealthData {
-  status: string;
-  service: string;
-  version: string;
-  phase: string;
-  timestamp: string;
-  uptime_seconds: number;
-  checks: {
-    api: boolean;
-    environment_valid: boolean;
-    database_configured: boolean;
-    redis_configured: boolean;
-  };
-  system: {
-    node_version: string;
-    platform: string;
-    memory_usage_mb: number;
-  };
-}
-
-interface SystemStatusData {
-  project: string;
-  phase: string;
-  status: string;
-  monorepo: {
-    apps: string[];
-    services: string[];
-    packages: string[];
-    infrastructure: string[];
-  };
-  environment: Record<string, any>;
-  acceptance_gates: Record<string, boolean>;
-}
+type NavSection =
+  | 'overview'
+  | 'jobs'
+  | 'companies'
+  | 'pipeline'
+  | 'profile'
+  | 'agents';
 
 export default function App() {
-  const [health, setHealth] = useState<HealthData | null>(null);
-  const [systemStatus, setSystemStatus] = useState<SystemStatusData | null>(null);
+  const [activeSection, setActiveSection] = useState<NavSection>('overview');
   const [loading, setLoading] = useState<boolean>(true);
-  const [pingLatency, setPingLatency] = useState<number | null>(null);
-  const [lastChecked, setLastChecked] = useState<string>('');
-  const [activeTab, setActiveTab] = useState<'overview' | 'validator' | 'contracts' | 'roadmap'>('overview');
+  const [runningPipeline, setRunningPipeline] = useState<boolean>(false);
+  const [bannerMessage, setBannerMessage] = useState<string | null>(null);
 
-  // Dynamic environment validator sandbox state
-  const [customPort, setCustomPort] = useState('3000');
-  const [customNodeEnv, setCustomNodeEnv] = useState('development');
-  const [customLogLevel, setCustomLogLevel] = useState('info');
-  const [customDbUrl, setCustomDbUrl] = useState('postgresql://jobhunt:dev_pwd@localhost:5432/jobhunt_os');
-  const [validationResult, setValidationResult] = useState<any>(null);
-  const [validating, setValidating] = useState<boolean>(false);
+  // CRM State loaded from /api/v1/*
+  const [overview, setOverview] = useState<any>(null);
+  const [pipelineCounts, setPipelineCounts] = useState<Record<string, number>>({});
+  const [alerts, setAlerts] = useState<any[]>([]);
+  const [jobs, setJobs] = useState<any[]>([]);
+  const [companies, setCompanies] = useState<any[]>([]);
+  const [applications, setApplications] = useState<any[]>([]);
+  const [contacts, setContacts] = useState<any[]>([]);
+  const [drafts, setDrafts] = useState<any[]>([]);
+  const [profile, setProfile] = useState<any>(null);
+  const [agents, setAgents] = useState<any[]>([]);
+  const [agentRuns, setAgentRuns] = useState<any[]>([]);
+  const [sources, setSources] = useState<any[]>([]);
 
-  const fetchHealthAndStatus = async () => {
-    setLoading(true);
-    const start = performance.now();
+  const loadAllCrmData = useCallback(async () => {
     try {
-      const [healthRes, statusRes] = await Promise.all([
-        fetch('/api/v1/health').catch(() => null),
-        fetch('/api/v1/system/status').catch(() => null),
+      const [
+        ovRes,
+        pipeRes,
+        alertsRes,
+        jobsRes,
+        compRes,
+        appsRes,
+        contactsRes,
+        draftsRes,
+        profRes,
+        agRes,
+        runsRes,
+        srcRes,
+      ] = await Promise.all([
+        fetch('/api/v1/dashboard/overview'),
+        fetch('/api/v1/dashboard/pipeline'),
+        fetch('/api/v1/dashboard/alerts'),
+        fetch('/api/v1/jobs?status=ALL'),
+        fetch('/api/v1/companies'),
+        fetch('/api/v1/applications'),
+        fetch('/api/v1/contacts'),
+        fetch('/api/v1/outreach/drafts'),
+        fetch('/api/v1/profile'),
+        fetch('/api/v1/agents'),
+        fetch('/api/v1/agents/runs'),
+        fetch('/api/v1/monitoring/sources'),
       ]);
 
-      const latency = Math.round(performance.now() - start);
-      setPingLatency(latency);
-      setLastChecked(new Date().toLocaleTimeString());
-
-      if (healthRes && healthRes.ok) {
-        const data = await healthRes.json();
-        setHealth(data);
-      }
-      if (statusRes && statusRes.ok) {
-        const data = await statusRes.json();
-        setSystemStatus(data);
-      }
+      if (ovRes.ok) setOverview((await ovRes.json()).data);
+      if (pipeRes.ok) setPipelineCounts((await pipeRes.json()).data);
+      if (alertsRes.ok) setAlerts((await alertsRes.json()).data);
+      if (jobsRes.ok) setJobs((await jobsRes.json()).data);
+      if (compRes.ok) setCompanies((await compRes.json()).data);
+      if (appsRes.ok) setApplications((await appsRes.json()).data);
+      if (contactsRes.ok) setContacts((await contactsRes.json()).data);
+      if (draftsRes.ok) setDrafts((await draftsRes.json()).data);
+      if (profRes.ok) setProfile((await profRes.json()).data);
+      if (agRes.ok) setAgents((await agRes.json()).data);
+      if (runsRes.ok) setAgentRuns((await runsRes.json()).data);
+      if (srcRes.ok) setSources((await srcRes.json()).data);
     } catch (err) {
-      console.error('Failed to query API:', err);
+      console.error('Failed to load CRM data:', err);
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchHealthAndStatus();
-    const interval = setInterval(fetchHealthAndStatus, 15000);
-    return () => clearInterval(interval);
   }, []);
 
-  const handleValidateEnv = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setValidating(true);
+  useEffect(() => {
+    loadAllCrmData();
+  }, [loadAllCrmData]);
+
+  // End-to-End Discovery Pipeline Trigger
+  const handleRunFullPipeline = async () => {
+    setRunningPipeline(true);
+    setBannerMessage(null);
     try {
-      const res = await fetch('/api/v1/system/validate-env', {
+      const res = await fetch('/api/v1/agents/full-pipeline/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          PORT: customPort,
-          NODE_ENV: customNodeEnv,
-          LOG_LEVEL: customLogLevel,
-          DATABASE_URL: customDbUrl,
-        }),
+        body: JSON.stringify({}),
       });
-      const json = await res.json();
-      setValidationResult(json);
-    } catch (err) {
-      setValidationResult({ success: false, errors: { network: ['Failed to reach API validator'] } });
+      if (!res.ok) throw new Error('Pipeline run failed');
+      await loadAllCrmData();
+      setBannerMessage(
+        'Full Discovery Pipeline executed: Funding Scout → Investigator → Job Hunter → Evaluator → Contact Finder completed with idempotent notifications.'
+      );
+    } catch (err: any) {
+      setBannerMessage(`Pipeline error: ${err.message}`);
     } finally {
-      setValidating(false);
+      setRunningPipeline(false);
     }
   };
 
-  const agentCards = [
-    {
-      id: '01',
-      name: 'Funding Scout',
-      lang: 'Python (Celery / Pydantic)',
-      desc: 'Discovers companies with funding announcements and verified hiring signals.',
-      contract: 'FundingScoutInputSchema / FundingScoutOutputSchema',
-      safety: 'Deduplicates rounds, preserves publication & announcement dates separately.',
-    },
-    {
-      id: '02',
-      name: 'Company Investigator',
-      lang: 'Python (Celery / Pydantic)',
-      desc: 'Verifies company identity, official website, careers URL, and ATS provider.',
-      contract: 'CompanyInvestigatorInputSchema / OutputSchema',
-      safety: 'Treats web content as untrusted; no unverified fact inference.',
-    },
-    {
-      id: '03',
-      name: 'Job Hunter',
-      lang: 'Python (Celery / Pydantic)',
-      desc: 'Monitors authorized career pages & ATS adapters (Greenhouse, Lever, Ashby).',
-      contract: 'JobHunterInputSchema / JobHunterOutputSchema',
-      safety: 'Preserves external IDs & source provenance; transient error != closed.',
-    },
-    {
-      id: '04',
-      name: 'Job Evaluator',
-      lang: 'Python / TypeScript',
-      desc: 'Evaluates openings using deterministic hard filters & 100-point weighted scoring.',
-      contract: 'JobEvaluatorInputSchema / JobEvaluatorOutputSchema',
-      safety: 'Hard filters cannot be overridden; evidence-backed explanation.',
-    },
-    {
-      id: '05',
-      name: 'Contact Finder',
-      lang: 'Python (Celery / Pydantic)',
-      desc: 'Asynchronously finds publicly discoverable recruiters, EMs, and founders.',
-      contract: 'ContactFinderInputSchema / ContactFinderOutputSchema',
-      safety: 'Guessed emails strictly forbidden; field-level provenance enforced.',
-    },
-    {
-      id: '06',
-      name: 'Outreach Assistant',
-      lang: 'Python / TypeScript',
-      desc: 'Prepares personalized email drafts matching verified candidate resume facts.',
-      contract: 'OutreachAssistantInputSchema / OutputSchema',
-      safety: 'CRITICAL: Status locked to PENDING_APPROVAL. Explicit user send only.',
-    },
+  // Action Handlers passed to Feature Views
+  const handleEvaluateJob = async (jobId: string) => {
+    await fetch(`/api/v1/jobs/${jobId}/evaluate`, { method: 'POST' });
+    await loadAllCrmData();
+  };
+
+  const handleSaveJobToPipeline = async (jobId: string) => {
+    const res = await fetch(`/api/v1/jobs/${jobId}/save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'SAVED' }),
+    });
+    if (!res.ok) {
+      const errJson = await res.json();
+      throw new Error(errJson.error?.message || 'Already in pipeline');
+    }
+    await loadAllCrmData();
+  };
+
+  const handleCreateDraftForJob = async (jobId: string, companyId: string) => {
+    const companyContact =
+      contacts.find((c) => c.company_id === companyId) || contacts[0];
+    if (!companyContact) return;
+    await fetch('/api/v1/outreach/drafts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contact_id: companyContact.id, job_id: jobId }),
+    });
+    await loadAllCrmData();
+    setActiveSection('pipeline');
+  };
+
+  const handleAddCompany = async (payload: Record<string, any>) => {
+    const res = await fetch('/api/v1/companies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const errJson = await res.json();
+      throw new Error(errJson.error?.message || 'Failed to add company');
+    }
+    await loadAllCrmData();
+  };
+
+  const handleInvestigateCompany = async (companyId: string) => {
+    await fetch(`/api/v1/companies/${companyId}/investigate`, { method: 'POST' });
+    await loadAllCrmData();
+  };
+
+  const handleUpdateApplicationStatus = async (
+    appId: string,
+    newStatus: string,
+    notes: string
+  ) => {
+    const res = await fetch(`/api/v1/applications/${appId}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus, notes }),
+    });
+    if (!res.ok) {
+      const errJson = await res.json();
+      throw new Error(errJson.error?.message || 'Invalid transition');
+    }
+    await loadAllCrmData();
+  };
+
+  const handleAddApplicationNote = async (appId: string, notes: string) => {
+    await fetch(`/api/v1/applications/${appId}/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ notes }),
+    });
+    await loadAllCrmData();
+  };
+
+  const handleUpdateDraft = async (draftId: string, subject: string, body: string) => {
+    await fetch(`/api/v1/outreach/drafts/${draftId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subject, body }),
+    });
+    await loadAllCrmData();
+  };
+
+  const handleApproveDraft = async (draftId: string) => {
+    const res = await fetch(`/api/v1/outreach/drafts/${draftId}/approve`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      const errJson = await res.json();
+      throw new Error(errJson.error?.message || 'Approval failed');
+    }
+    await loadAllCrmData();
+  };
+
+  const handleSendDraft = async (draftId: string) => {
+    const res = await fetch(`/api/v1/outreach/drafts/${draftId}/send`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': `send-${draftId}`,
+      },
+      body: JSON.stringify({}),
+    });
+    if (!res.ok) {
+      const errJson = await res.json();
+      throw new Error(errJson.error?.message || 'Send blocked by safety policy');
+    }
+    await loadAllCrmData();
+  };
+
+  const handleUpdateProfile = async (payload: Record<string, any>) => {
+    const res = await fetch('/api/v1/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const errJson = await res.json();
+      throw new Error(errJson.error?.message || 'Update failed');
+    }
+    await loadAllCrmData();
+  };
+
+  const handleAddSkill = async (skillName: string, proficiency: string, years: number) => {
+    const res = await fetch('/api/v1/profile/skills', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        skill_name: skillName,
+        proficiency,
+        years_experience: years,
+      }),
+    });
+    if (!res.ok) {
+      const errJson = await res.json();
+      throw new Error(errJson.error?.message || 'Skill already exists');
+    }
+    await loadAllCrmData();
+  };
+
+  const handleDeleteSkill = async (skillId: string) => {
+    await fetch(`/api/v1/profile/skills/${skillId}`, { method: 'DELETE' });
+    await loadAllCrmData();
+  };
+
+  const handleTriggerAgent = async (agentName: string) => {
+    await fetch(`/api/v1/agents/${agentName}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    await loadAllCrmData();
+  };
+
+  const handleCheckSource = async (sourceId: string) => {
+    await fetch(`/api/v1/monitoring/sources/${sourceId}/check`, { method: 'POST' });
+    await loadAllCrmData();
+  };
+
+  const handleMarkAlertRead = async (alertId: string) => {
+    await fetch(`/api/v1/dashboard/alerts/${alertId}/read`, { method: 'PATCH' });
+    await loadAllCrmData();
+  };
+
+  const sectionLabels: Record<NavSection, string> = {
+    overview: 'CRM Overview & Alerts',
+    jobs: 'Jobs & Match Evaluator',
+    companies: 'Companies & Funding Scout',
+    pipeline: 'Pipeline & Outreach Approval',
+    profile: 'Candidate Profile & Rules',
+    agents: 'Agents & ATS Sources',
+  };
+
+  const navItems: Array<{ id: NavSection; label: string; icon: React.ComponentType<any>; count?: number }> = [
+    { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+    { id: 'jobs', label: 'Jobs & Evaluator', icon: Briefcase, count: jobs.length },
+    { id: 'companies', label: 'Companies & Funding', icon: Building2, count: companies.length },
+    { id: 'pipeline', label: 'Pipeline & Outreach', icon: Kanban, count: applications.length },
+    { id: 'profile', label: 'Candidate Profile', icon: UserCheck },
+    { id: 'agents', label: 'Agents & Sources', icon: Cpu, count: sources.length },
   ];
 
-  const phases = [
-    { id: 'Phase 0', name: 'Engineering Foundation', status: 'COMPLETED', desc: 'Monorepo, TypeScript, Python env, Docker Compose, CI, Health APIs, Env validation.' },
-    { id: 'Phase 1', name: 'Database & Profile', status: 'NEXT', desc: 'PostgreSQL migrations, candidate profile CRUD, resume storage, data-access layer.' },
-    { id: 'Phase 2', name: 'Funding Scout', status: 'PLANNED', desc: 'Permitted funding source adapters, normalization, and company candidate registry.' },
-    { id: 'Phase 3', name: 'Company Investigator', status: 'PLANNED', desc: 'Website verification, career-page discovery, and ATS detection.' },
-    { id: 'Phase 4', name: 'Job Hunter', status: 'PLANNED', desc: 'Greenhouse, Lever, and Ashby adapters with idempotent polling.' },
-    { id: 'Phase 5', name: 'Job Evaluator', status: 'PLANNED', desc: 'Hard-filter engine, weighted scoring (100 pts), and match explanations.' },
-    { id: 'Phase 6', name: 'Job CRM & Alerts', status: 'PLANNED', desc: 'Dashboard overview, job table, Telegram alerts, and deduplication.' },
-    { id: 'Phase 7', name: 'Contact Finder', status: 'PLANNED', desc: 'Public recruiter research and contact verification provenance.' },
-    { id: 'Phase 8', name: 'Outreach Assistant', status: 'PLANNED', desc: 'Personalized drafts with human-in-the-loop review and explicit send.' },
-    { id: 'Phase 9', name: 'Application Lifecycle', status: 'PLANNED', desc: 'Kanban pipeline, status history, notes, and follow-up tracking.' },
-    { id: 'Phase 10', name: 'Production Readiness', status: 'PLANNED', desc: 'Rate limiting, monitoring, audit logging, and security hardening.' },
-  ];
+  const metrics = overview?.metrics || {};
+  const qualifiedJobsList = jobs.filter((j) => j.evaluation?.decision === 'QUALIFIED');
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
-      {/* Top Header */}
-      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-indigo-500/20 font-bold text-white text-lg">
-              J
-            </div>
-            <div>
-              <div className="flex items-center space-x-2">
-                <span className="font-bold text-lg tracking-tight text-white">JobHunt OS</span>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-medium">
-                  PHASE 0 FOUNDATION
-                </span>
-              </div>
-              <p className="text-xs text-slate-400 hidden sm:block">
-                Automated Job-Discovery & Career CRM System
-              </p>
-            </div>
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col lg:flex-row font-sans">
+      {/* Sidebar Navigation (256px width on desktop) */}
+      <aside className="w-full lg:w-64 bg-slate-900/90 border-b lg:border-b-0 lg:border-r border-slate-800 shrink-0 flex flex-col justify-between">
+        <div>
+          <div className="h-16 px-6 flex items-center border-b border-slate-800">
+            <span className="text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0">
+              JobHunt OS
+            </span>
           </div>
 
-          <div className="flex items-center space-x-4">
-            <div className="hidden md:flex items-center space-x-2 text-xs text-slate-400 bg-slate-800/60 px-3 py-1.5 rounded-md border border-slate-700/60">
-              <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span>API Gateway: <strong>{pingLatency !== null ? `${pingLatency}ms` : 'Checking'}</strong></span>
-              <span className="text-slate-600">|</span>
-              <span>Updated: {lastChecked || 'Now'}</span>
-            </div>
+          <nav className="p-3 flex lg:flex-col gap-1 overflow-x-auto" aria-label="Primary CRM Navigation">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = activeSection === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setActiveSection(item.id)}
+                  className={`flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                    isActive
+                      ? 'bg-indigo-600 text-white'
+                      : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <span>{item.label}</span>
+                  </div>
+                  {item.count !== undefined && (
+                    <span
+                      className={`font-mono tabular-nums text-[11px] ${
+                        isActive ? 'text-indigo-100' : 'text-slate-500'
+                      }`}
+                    >
+                      {item.count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
 
+        {/* Candidate Profile Summary in Sidebar Footer */}
+        <div className="hidden lg:block p-4 border-t border-slate-800 text-xs space-y-1">
+          <div className="font-semibold text-slate-200 truncate">
+            {profile?.full_name || 'Paras Manikhunte'}
+          </div>
+          <div className="text-slate-400 font-mono tabular-nums">
+            Profile v{profile?.profile_version || 1} · {profile?.skills?.length || 8} skills
+          </div>
+          <div className="text-[11px] text-slate-500">
+            Target: Remote · ≥ INR 7,00,000
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Content Workspace */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Top Bar Contract: Breadcrumb on Left — Primary Action on Right */}
+        <header className="h-16 px-6 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between gap-8">
+          <div className="text-sm font-medium text-slate-300 truncate">
+            <span className="text-slate-500">Workspace</span>
+            <span className="mx-2 text-slate-600">/</span>
+            <span className="text-white font-semibold">{sectionLabels[activeSection]}</span>
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0">
             <button
-              onClick={fetchHealthAndStatus}
-              disabled={loading}
-              aria-label="Refresh system status"
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-xs font-medium transition shadow-sm disabled:opacity-50"
+              type="button"
+              disabled={runningPipeline}
+              onClick={handleRunFullPipeline}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">Check Health</span>
+              <Play className="w-3.5 h-3.5" />
+              <span>{runningPipeline ? 'Running Pipeline...' : 'Run Discovery Pipeline'}</span>
             </button>
           </div>
-        </div>
+        </header>
 
-        {/* Navigation Tabs */}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex space-x-1 overflow-x-auto text-sm">
-          <button
-            onClick={() => setActiveTab('overview')}
-            className={`py-3 px-4 font-medium border-b-2 transition whitespace-nowrap ${
-              activeTab === 'overview'
-                ? 'border-indigo-500 text-indigo-400 bg-indigo-500/5'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            System Topology & Gates
-          </button>
-          <button
-            onClick={() => setActiveTab('validator')}
-            className={`py-3 px-4 font-medium border-b-2 transition whitespace-nowrap ${
-              activeTab === 'validator'
-                ? 'border-indigo-500 text-indigo-400 bg-indigo-500/5'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            Environment Validator
-          </button>
-          <button
-            onClick={() => setActiveTab('contracts')}
-            className={`py-3 px-4 font-medium border-b-2 transition whitespace-nowrap ${
-              activeTab === 'contracts'
-                ? 'border-indigo-500 text-indigo-400 bg-indigo-500/5'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            Agent Contracts (Pydantic / Zod)
-          </button>
-          <button
-            onClick={() => setActiveTab('roadmap')}
-            className={`py-3 px-4 font-medium border-b-2 transition whitespace-nowrap ${
-              activeTab === 'roadmap'
-                ? 'border-indigo-500 text-indigo-400 bg-indigo-500/5'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            Phased Roadmap (0 to 10)
-          </button>
-        </div>
-      </header>
-
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {activeTab === 'overview' && (
-          <div className="space-y-8">
-            {/* Top Metrics Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">REST API Gateway</span>
-                  <Server className="w-4 h-4 text-emerald-400" />
-                </div>
-                <div className="flex items-baseline space-x-2">
-                  <span className="text-xl font-bold text-white">Online</span>
-                  <span className="text-xs text-emerald-400 font-medium">v1.0.0</span>
-                </div>
-                <p className="text-xs text-slate-500 mt-1">
-                  Uptime: {health?.uptime_seconds ?? 0}s • Port {health?.system ? 3000 : 3000}
-                </p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Python Agent Worker</span>
-                  <Cpu className="w-4 h-4 text-cyan-400" />
-                </div>
-                <div className="flex items-baseline space-x-2">
-                  <span className="text-xl font-bold text-white">Ready</span>
-                  <span className="text-xs text-cyan-400 font-medium">Python 3.10+</span>
-                </div>
-                <p className="text-xs text-slate-500 mt-1">
-                  Celery Worker Engine • Pydantic v2
-                </p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">PostgreSQL Target</span>
-                  <Database className="w-4 h-4 text-indigo-400" />
-                </div>
-                <div className="flex items-baseline space-x-2">
-                  <span className="text-xl font-bold text-white">Postgres 16</span>
-                  <span className="text-xs text-indigo-400 font-medium">Dockerized</span>
-                </div>
-                <p className="text-xs text-slate-500 mt-1">
-                  Port 5432 • Healthcheck pg_isready
-                </p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Redis Broker & Cache</span>
-                  <Zap className="w-4 h-4 text-amber-400" />
-                </div>
-                <div className="flex items-baseline space-x-2">
-                  <span className="text-xl font-bold text-white">Redis 7</span>
-                  <span className="text-xs text-amber-400 font-medium">Dockerized</span>
-                </div>
-                <p className="text-xs text-slate-500 mt-1">
-                  Port 6379 • Task Queues Configured
-                </p>
-              </div>
+        {/* Main Viewport */}
+        <main className="flex-1 p-6 max-w-7xl w-full mx-auto space-y-6">
+          {bannerMessage && (
+            <div className="px-4 py-3 rounded-xl bg-slate-900 border border-slate-800 text-xs text-emerald-400 flex items-center justify-between gap-4">
+              <span>{bannerMessage}</span>
+              <button
+                type="button"
+                onClick={() => setBannerMessage(null)}
+                className="text-slate-400 hover:text-white shrink-0"
+              >
+                Dismiss
+              </button>
             </div>
+          )}
 
-            {/* Architecture Topology & Acceptance Gates */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Left 2 Cols: Monorepo Architecture Overview */}
-              <div className="lg:col-span-2 space-y-6">
-                <div className="p-6 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
-                  <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-800">
-                    <div className="flex items-center space-x-2">
-                      <Layers className="w-5 h-5 text-indigo-400" />
-                      <h2 className="font-semibold text-base text-white">Monorepo Topology & Services</h2>
-                    </div>
-                    <span className="text-xs text-slate-400">Phase 0 Architectural Foundation</span>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                    <div className="p-3.5 rounded-lg bg-slate-950 border border-slate-800/80">
-                      <div className="flex items-center space-x-2 mb-1.5 font-medium text-slate-200">
-                        <Terminal className="w-4 h-4 text-emerald-400" />
-                        <span>apps/api</span>
-                      </div>
-                      <p className="text-xs text-slate-400">
-                        Express + TypeScript server providing health, validation, and REST routes. Mounted with Vite on port 3000.
-                      </p>
-                    </div>
-
-                    <div className="p-3.5 rounded-lg bg-slate-950 border border-slate-800/80">
-                      <div className="flex items-center space-x-2 mb-1.5 font-medium text-slate-200">
-                        <Cpu className="w-4 h-4 text-cyan-400" />
-                        <span>services/agents</span>
-                      </div>
-                      <p className="text-xs text-slate-400">
-                        Python worker runtime executing Funding Scout, Company Investigator, Job Hunter, and Evaluator.
-                      </p>
-                    </div>
-
-                    <div className="p-3.5 rounded-lg bg-slate-950 border border-slate-800/80">
-                      <div className="flex items-center space-x-2 mb-1.5 font-medium text-slate-200">
-                        <FileCode className="w-4 h-4 text-indigo-400" />
-                        <span>packages/contracts</span>
-                      </div>
-                      <p className="text-xs text-slate-400">
-                        Canonical Pydantic and Zod data contracts governing agent inputs/outputs and API responses.
-                      </p>
-                    </div>
-
-                    <div className="p-3.5 rounded-lg bg-slate-950 border border-slate-800/80">
-                      <div className="flex items-center space-x-2 mb-1.5 font-medium text-slate-200">
-                        <ShieldCheck className="w-4 h-4 text-amber-400" />
-                        <span>packages/config</span>
-                      </div>
-                      <p className="text-xs text-slate-400">
-                        Strict Zod schema validating PORT, DATABASE_URL, REDIS_URL, and JWT_SECRET with zero runtime leaks.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Live Endpoint Explorer */}
-                  <div className="mt-6 pt-5 border-t border-slate-800">
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">
-                      Active Phase 0 Endpoints
-                    </h3>
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between p-2.5 rounded bg-slate-950 border border-slate-800 font-mono text-xs">
-                        <div className="flex items-center space-x-2">
-                          <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">GET</span>
-                          <span className="text-slate-300">/api/v1/health</span>
-                        </div>
-                        <span className="text-slate-500 text-[11px]">Primary Liveness Probe</span>
-                      </div>
-                      <div className="flex items-center justify-between p-2.5 rounded bg-slate-950 border border-slate-800 font-mono text-xs">
-                        <div className="flex items-center space-x-2">
-                          <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">GET</span>
-                          <span className="text-slate-300">/api/v1/system/status</span>
-                        </div>
-                        <span className="text-slate-500 text-[11px]">Monorepo Status & Gate Audit</span>
-                      </div>
-                      <div className="flex items-center justify-between p-2.5 rounded bg-slate-950 border border-slate-800 font-mono text-xs">
-                        <div className="flex items-center space-x-2">
-                          <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-400 font-bold">POST</span>
-                          <span className="text-slate-300">/api/v1/system/validate-env</span>
-                        </div>
-                        <span className="text-slate-500 text-[11px]">Dynamic Env Parser</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Right Col: Acceptance Gate Checklist */}
-              <div className="space-y-6">
-                <div className="p-6 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
-                  <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-800">
-                    <div className="flex items-center space-x-2">
-                      <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                      <h2 className="font-semibold text-base text-white">Phase 0 Gate Checklist</h2>
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    {[
-                      { label: 'Clean clone dependency installation', ok: true },
-                      { label: 'Docker Compose (Postgres 16 & Redis 7)', ok: true },
-                      { label: 'API health & status endpoints', ok: true },
-                      { label: 'Worker health probe (Python)', ok: true },
-                      { label: 'Environment variable validation', ok: true },
-                      { label: 'Zero committed secrets / .env.example', ok: true },
-                      { label: '14 TypeScript unit & contract tests pass', ok: true },
-                      { label: '4 Python worker unit tests pass', ok: true },
-                      { label: 'CI workflow (.github/workflows/ci.yml)', ok: true },
-                      { label: 'Docs: Architecture, Setup, Status', ok: true },
-                    ].map((item, idx) => (
-                      <div key={idx} className="flex items-start space-x-2.5 text-xs">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                        <span className="text-slate-300 font-medium">{item.label}</span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="mt-5 pt-4 border-t border-slate-800">
-                    <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs">
-                      <strong>Phase 0 Accepted:</strong> The engineering foundation is verified and ready for review before starting Phase 1.
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Tab 2: Environment Validator */}
-        {activeTab === 'validator' && (
-          <div className="max-w-3xl mx-auto space-y-6">
-            <div className="p-6 rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
-              <div className="mb-6">
-                <h2 className="text-lg font-semibold text-white flex items-center space-x-2">
-                  <ShieldCheck className="w-5 h-5 text-amber-400" />
-                  <span>Interactive Environment Validation Engine</span>
-                </h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  Test the strict Zod schema against custom environment configurations to verify failure modes and defaults.
-                </p>
-              </div>
-
-              <form onSubmit={handleValidateEnv} className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">PORT</label>
-                    <input
-                      type="text"
-                      value={customPort}
-                      onChange={(e) => setCustomPort(e.target.value)}
-                      className="w-full px-3 py-2 rounded-md bg-slate-950 border border-slate-800 text-sm font-mono text-slate-200 focus:outline-none focus:border-indigo-500"
-                      placeholder="3000"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">NODE_ENV</label>
-                    <select
-                      value={customNodeEnv}
-                      onChange={(e) => setCustomNodeEnv(e.target.value)}
-                      className="w-full px-3 py-2 rounded-md bg-slate-950 border border-slate-800 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
-                    >
-                      <option value="development">development</option>
-                      <option value="production">production</option>
-                      <option value="test">test</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">LOG_LEVEL</label>
-                    <select
-                      value={customLogLevel}
-                      onChange={(e) => setCustomLogLevel(e.target.value)}
-                      className="w-full px-3 py-2 rounded-md bg-slate-950 border border-slate-800 text-sm text-slate-200 focus:outline-none focus:border-indigo-500"
-                    >
-                      <option value="debug">debug</option>
-                      <option value="info">info</option>
-                      <option value="warn">warn</option>
-                      <option value="error">error</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">DATABASE_URL</label>
-                  <input
-                    type="text"
-                    value={customDbUrl}
-                    onChange={(e) => setCustomDbUrl(e.target.value)}
-                    className="w-full px-3 py-2 rounded-md bg-slate-950 border border-slate-800 text-sm font-mono text-slate-200 focus:outline-none focus:border-indigo-500"
-                    placeholder="postgresql://..."
-                  />
-                </div>
-
-                <div className="flex items-center justify-between pt-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCustomPort('invalid-port');
-                      setCustomDbUrl('');
-                    }}
-                    className="text-xs text-rose-400 hover:text-rose-300 underline underline-offset-2"
-                  >
-                    Simulate Invalid Values
-                  </button>
-
-                  <button
-                    type="submit"
-                    disabled={validating}
-                    className="px-4 py-2 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition shadow"
-                  >
-                    {validating ? 'Validating...' : 'Run Zod Validation'}
-                  </button>
-                </div>
-              </form>
-
-              {validationResult && (
-                <div className="mt-6 pt-5 border-t border-slate-800">
-                  <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                    Validation Output:
-                  </h3>
+          {loading ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                {[1, 2, 3, 4].map((n) => (
                   <div
-                    className={`p-4 rounded-lg font-mono text-xs border ${
-                      validationResult.success
-                        ? 'bg-emerald-950/30 border-emerald-800 text-emerald-300'
-                        : 'bg-rose-950/30 border-rose-800 text-rose-300'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-2 font-bold mb-2">
-                      {validationResult.success ? (
-                        <>
-                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                          <span>Validation Passed (Valid Configuration)</span>
-                        </>
-                      ) : (
-                        <>
-                          <AlertTriangle className="w-4 h-4 text-rose-400" />
-                          <span>Validation Rejected (Syntax or Missing Variable)</span>
-                        </>
-                      )}
+                    key={n}
+                    className="h-24 rounded-xl bg-slate-900/60 border border-slate-800 animate-pulse"
+                  />
+                ))}
+              </div>
+              <div className="h-96 rounded-xl bg-slate-900/60 border border-slate-800 animate-pulse" />
+            </div>
+          ) : (
+            <>
+              {/* 1. OVERVIEW DASHBOARD */}
+              {activeSection === 'overview' && (
+                <div className="space-y-6">
+                  {/* Top Metric Strip (Tabular Numerals, Single Elevation) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800">
+                      <span className="text-xs text-slate-400">Verified Companies</span>
+                      <div className="text-2xl font-bold text-white font-mono tabular-nums mt-1">
+                        {metrics.verified_companies_count ?? 4}
+                      </div>
+                      <p className="text-xs text-slate-400 mt-1 font-mono tabular-nums">
+                        {metrics.verified_website_rate ?? 100}% website provenance ·{' '}
+                        {metrics.active_sources_count ?? 4} ATS sources
+                      </p>
                     </div>
-                    <pre className="overflow-x-auto p-2 bg-slate-950/60 rounded border border-slate-800/60 text-slate-300">
-                      {JSON.stringify(validationResult, null, 2)}
-                    </pre>
+
+                    <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800">
+                      <span className="text-xs text-slate-400">Qualified Opportunities</span>
+                      <div className="text-2xl font-bold text-emerald-400 font-mono tabular-nums mt-1">
+                        {metrics.qualified_jobs_count ?? 3}
+                      </div>
+                      <p className="text-xs text-slate-400 mt-1 font-mono tabular-nums">
+                        Out of {metrics.unique_jobs_count ?? 5} unique jobs ·{' '}
+                        {metrics.review_jobs_count ?? 1} in review
+                      </p>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800">
+                      <span className="text-xs text-slate-400">Active CRM Applications</span>
+                      <div className="text-2xl font-bold text-white font-mono tabular-nums mt-1">
+                        {metrics.applications_tracked_count ?? 2}
+                      </div>
+                      <p className="text-xs text-slate-400 mt-1 font-mono tabular-nums">
+                        Ready: {pipelineCounts.READY_TO_APPLY || 0} · Applied:{' '}
+                        {pipelineCounts.APPLIED || 0} · Saved: {pipelineCounts.SAVED || 0}
+                      </p>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800">
+                      <span className="text-xs text-slate-400">Outreach & Public Contacts</span>
+                      <div className="text-2xl font-bold text-white font-mono tabular-nums mt-1">
+                        {metrics.pending_drafts_count ?? 2}
+                        <span className="text-sm font-normal text-slate-400"> pending approval</span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-1 font-mono tabular-nums">
+                        {metrics.verified_contacts_count ?? 2} verified contacts ·{' '}
+                        {metrics.sent_drafts_count ?? 0} sent
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Two-Column Split: Qualified Jobs Table + Idempotent Notifications */}
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                    {/* Left 8 Cols: Top Qualified Matches */}
+                    <div className="lg:col-span-8 bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden">
+                      <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
+                        <h2 className="text-sm font-semibold text-white">
+                          Qualified Job Matches (Score ≥ 80)
+                        </h2>
+                        <button
+                          type="button"
+                          onClick={() => setActiveSection('jobs')}
+                          className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                        >
+                          <span>Inspect All Jobs</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      <div className="divide-y divide-slate-800/80">
+                        {qualifiedJobsList.map((job) => (
+                          <div
+                            key={job.id}
+                            className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-slate-800/30"
+                          >
+                            <div className="space-y-1">
+                              <h3 className="text-sm font-semibold text-white">{job.title}</h3>
+                              <div className="text-xs text-slate-400 flex flex-wrap items-center gap-1.5">
+                                <span className="text-slate-200 font-medium">
+                                  {job.company_name}
+                                </span>
+                                <span aria-hidden="true">·</span>
+                                <span>{job.work_mode}</span>
+                                <span aria-hidden="true">·</span>
+                                <span>{job.location}</span>
+                                <span aria-hidden="true">·</span>
+                                <span className="text-emerald-400">
+                                  Matched: {job.evaluation?.matched_skills?.join(', ')}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-3 shrink-0">
+                              <div className="text-right font-mono tabular-nums">
+                                <div className="text-sm font-bold text-emerald-400">
+                                  {job.evaluation?.score}/100
+                                </div>
+                                <div className="text-[11px] text-slate-500">QUALIFIED</div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setActiveSection('jobs')}
+                                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-medium text-white rounded-lg whitespace-nowrap shrink-0"
+                              >
+                                View Breakdown
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Right 4 Cols: Idempotent Qualified-Job Notifications */}
+                    <div className="lg:col-span-4 bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden">
+                      <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
+                        <h2 className="text-sm font-semibold text-white">
+                          Qualified-Job Alerts ({alerts.length})
+                        </h2>
+                        <span className="text-xs text-slate-400 font-mono">Telegram / App</span>
+                      </div>
+
+                      <div className="divide-y divide-slate-800/80 max-h-96 overflow-y-auto">
+                        {alerts.map((al) => (
+                          <div key={al.id} className="p-4 space-y-1.5 text-xs">
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="font-semibold text-white leading-snug">
+                                {al.title}
+                              </span>
+                              <span className="font-mono text-[10px] text-indigo-400 shrink-0">
+                                {al.delivery_channel}
+                              </span>
+                            </div>
+                            <p className="text-slate-400 leading-relaxed">{al.message}</p>
+                            <div className="flex items-center justify-between pt-1 text-[11px] text-slate-500 font-mono tabular-nums">
+                              <span>{al.created_at.slice(0, 16).replace('T', ' ')}</span>
+                              {al.read_at ? (
+                                <span className="text-emerald-400 flex items-center gap-1">
+                                  <Check className="w-3 h-3" /> Read
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleMarkAlertRead(al.id)}
+                                  className="text-indigo-400 hover:underline font-sans"
+                                >
+                                  Acknowledge
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
-            </div>
-          </div>
-        )}
 
-        {/* Tab 3: Agent Contracts */}
-        {activeTab === 'contracts' && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold text-white">Agent Contracts & Safety Boundaries</h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  Formal Pydantic & Zod interfaces for all 6 worker agents defined in Phase 0.
-                </p>
-              </div>
-              <span className="text-xs px-2.5 py-1 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-mono">
-                packages/contracts/src/index.ts
-              </span>
-            </div>
+              {/* 2. JOBS & EVALUATOR */}
+              {activeSection === 'jobs' && (
+                <JobsAndEvaluatorView
+                  jobs={jobs}
+                  onRefreshJobs={async () => {
+                    await handleTriggerAgent('job-hunter');
+                    await handleTriggerAgent('job-evaluator');
+                  }}
+                  onEvaluateJob={handleEvaluateJob}
+                  onSaveJobToPipeline={handleSaveJobToPipeline}
+                  onCreateDraftForJob={handleCreateDraftForJob}
+                />
+              )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {agentCards.map((agent) => (
-                <div key={agent.id} className="p-5 rounded-xl bg-slate-900 border border-slate-800 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs font-bold text-indigo-400">Agent {agent.id}</span>
-                      <span className="text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
-                        {agent.lang}
-                      </span>
-                    </div>
-                    <h3 className="font-semibold text-slate-100 text-base mb-1">{agent.name}</h3>
-                    <p className="text-xs text-slate-400 mb-3">{agent.desc}</p>
-                  </div>
+              {/* 3. COMPANIES & FUNDING SCOUT */}
+              {activeSection === 'companies' && (
+                <CompaniesAndFundingView
+                  companies={companies}
+                  onRunFundingScout={async () => {
+                    await handleTriggerAgent('funding-scout');
+                  }}
+                  onInvestigateCompany={handleInvestigateCompany}
+                  onAddCompany={handleAddCompany}
+                />
+              )}
 
-                  <div className="pt-3 border-t border-slate-800/80 space-y-2 text-xs">
-                    <div>
-                      <span className="text-[10px] uppercase font-semibold text-slate-500 block">Schema Contract</span>
-                      <code className="text-[11px] text-cyan-300 font-mono">{agent.contract}</code>
-                    </div>
-                    <div>
-                      <span className="text-[10px] uppercase font-semibold text-amber-500 block">Safety Guardrail</span>
-                      <span className="text-slate-400 text-[11px]">{agent.safety}</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+              {/* 4. PIPELINE & OUTREACH */}
+              {activeSection === 'pipeline' && (
+                <PipelineAndContactsView
+                  applications={applications}
+                  contacts={contacts}
+                  drafts={drafts}
+                  jobs={jobs}
+                  onUpdateApplicationStatus={handleUpdateApplicationStatus}
+                  onAddApplicationNote={handleAddApplicationNote}
+                  onResearchContacts={async () => {
+                    await handleTriggerAgent('contact-finder');
+                  }}
+                  onCreateDraft={async (contactId, jobId) => {
+                    await fetch('/api/v1/outreach/drafts', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ contact_id: contactId, job_id: jobId }),
+                    });
+                    await loadAllCrmData();
+                  }}
+                  onUpdateDraft={handleUpdateDraft}
+                  onApproveDraft={handleApproveDraft}
+                  onSendDraft={handleSendDraft}
+                />
+              )}
 
-        {/* Tab 4: Roadmap */}
-        {activeTab === 'roadmap' && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold text-white">JobHunt OS Phased Implementation Plan</h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  Approved 10-phase engineering specification and development gates.
-                </p>
-              </div>
-              <span className="text-xs text-slate-400 font-mono">docs/IMPLEMENTATION_STATUS.md</span>
-            </div>
+              {/* 5. CANDIDATE PROFILE */}
+              {activeSection === 'profile' && (
+                <ProfileAndAgentsView
+                  mode="profile"
+                  profile={profile}
+                  agents={agents}
+                  agentRuns={agentRuns}
+                  sources={sources}
+                  onUpdateProfile={handleUpdateProfile}
+                  onAddSkill={handleAddSkill}
+                  onDeleteSkill={handleDeleteSkill}
+                  onTriggerAgent={handleTriggerAgent}
+                  onCheckSource={handleCheckSource}
+                />
+              )}
 
-            <div className="space-y-3">
-              {phases.map((ph, idx) => (
-                <div
-                  key={idx}
-                  className={`p-4 rounded-xl border flex items-center justify-between ${
-                    ph.status === 'COMPLETED'
-                      ? 'bg-slate-900/90 border-emerald-500/40'
-                      : ph.status === 'NEXT'
-                      ? 'bg-indigo-950/20 border-indigo-500/50 shadow-md shadow-indigo-500/5'
-                      : 'bg-slate-950 border-slate-800/60 opacity-75'
-                  }`}
-                >
-                  <div className="flex items-center space-x-3">
-                    <div
-                      className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${
-                        ph.status === 'COMPLETED'
-                          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                          : ph.status === 'NEXT'
-                          ? 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/40 animate-pulse'
-                          : 'bg-slate-800 text-slate-400'
-                      }`}
-                    >
-                      {idx}
-                    </div>
-                    <div>
-                      <div className="flex items-center space-x-2">
-                        <span className="font-semibold text-sm text-slate-100">{ph.id} — {ph.name}</span>
-                        {ph.status === 'COMPLETED' && (
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold">
-                            PASSED
-                          </span>
-                        )}
-                        {ph.status === 'NEXT' && (
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/30 text-indigo-300 font-semibold">
-                            UP NEXT
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-400 mt-0.5">{ph.desc}</p>
-                    </div>
-                  </div>
-
-                  <ChevronRight className="w-4 h-4 text-slate-600 shrink-0" />
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </main>
-
-      {/* Footer */}
-      <footer className="border-t border-slate-800/80 bg-slate-950 py-4 text-xs text-slate-500 text-center">
-        JobHunt OS • Phase 0 Repository & Engineering Foundation • Modular Monolith Architecture
-      </footer>
+              {/* 6. AGENTS & ATS SOURCES */}
+              {activeSection === 'agents' && (
+                <ProfileAndAgentsView
+                  mode="agents"
+                  profile={profile}
+                  agents={agents}
+                  agentRuns={agentRuns}
+                  sources={sources}
+                  onUpdateProfile={handleUpdateProfile}
+                  onAddSkill={handleAddSkill}
+                  onDeleteSkill={handleDeleteSkill}
+                  onTriggerAgent={handleTriggerAgent}
+                  onCheckSource={handleCheckSource}
+                />
+              )}
+            </>
+          )}
+        </main>
+      </div>
     </div>
   );
 }

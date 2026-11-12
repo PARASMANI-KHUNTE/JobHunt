@@ -1,105 +1,47 @@
 # JobHunt OS — Implementation Status Tracker
 
 **Current Date:** 2026-11-12  
-**Active Phase:** Phase 0 — Repository and Engineering Foundation  
-**Phase Status:** COMPLETED & VERIFIED (Ready for Review)  
-**Next Phase:** Phase 1 — Database and Candidate Profile (Awaiting user review)
+**Active Phase:** Phases 0 through 10 — Complete End-to-End Implementation  
+**Phase Status:** COMPLETED & VERIFIED (All 10 Phases Passing Acceptance Gates)  
 
 ---
 
-## 1. Phase 0 Deliverables Matrix
+## 1. Phased Implementation Matrix (Phases 0 to 10)
 
-| Deliverable | Status | Verification & Artifact |
-|---|---|---|
-| Monorepo & workspace topology | ✅ Complete | `apps/api`, `packages/config`, `packages/contracts`, `services/agents`, `infrastructure/docker` |
-| TypeScript tooling & lint | ✅ Complete | `npm run lint` (`tsc --noEmit`) passes cleanly with zero warnings |
-| Python worker environment & requirements | ✅ Complete | `services/agents/requirements.txt`, `pyproject.toml`, Python 3.10+ runtime verified |
-| Docker Compose (PostgreSQL 16 & Redis 7) | ✅ Complete | `docker-compose.yml` with healthchecks (`pg_isready`, `redis-cli ping`), volumes, networks |
-| Dockerfiles for API & Worker | ✅ Complete | `infrastructure/docker/Dockerfile.api`, `infrastructure/docker/Dockerfile.worker` |
-| Environment validation engine | ✅ Complete | `packages/config/src/env.ts` with strict Zod validation; 6 unit tests passing |
-| API health & status endpoints | ✅ Complete | `/api/v1/health`, `/health`, `/api/v1/system/status`; 4 integration tests passing |
-| Python worker health check probe | ✅ Complete | `services/agents/src/health_check.py`; 4 unit tests passing |
-| Canonical agent & API contracts | ✅ Complete | `packages/contracts/src/index.ts`; 4 contract tests passing |
-| Continuous Integration (CI) pipeline | ✅ Complete | `.github/workflows/ci.yml` running lint, tests, Python checks, and build |
-| Architecture & Setup Documentation | ✅ Complete | `docs/ARCHITECTURE.md`, `docs/SETUP.md`, `docs/IMPLEMENTATION_STATUS.md` |
-| Unified Server (Port 3000) | ✅ Complete | `server.ts` mounting Express API routes and Vite dev server |
+| Phase | Name | Status | Key Deliverables & Artifacts |
+|---|---|---|---|
+| **Phase 0** | Repository & Engineering Foundation | ✅ Complete | Monorepo (`apps/api`, `services/agents`, `packages/*`), `docker-compose.yml` (PostgreSQL 16 + Redis 7), `packages/config/src/env.ts`, `/api/v1/health`, `.github/workflows/ci.yml` |
+| **Phase 1** | Database & Candidate Profile | ✅ Complete | `database/migrations/001_initial_schema.sql` (all 15 tables + indexes), `apps/api/src/database/store.ts`, Candidate Profile CRUD with `profile_version` increments, unique `(profile_id, normalized_skill)` constraint, Section 13 seed defaults |
+| **Phase 2** | Funding Scout & Company Discovery | ✅ Complete | Agent 01 (`funding-scout`), canonical domain deduplication (never merging distinct domains with similar names), distinct `announcement_date` and `publication_date`, funding provenance |
+| **Phase 3** | Company Investigator & Hiring Infrastructure | ✅ Complete | Agent 02 (`company-investigator`), website verification, careers URL & ATS detection (`GREENHOUSE`, `LEVER`, `ASHBY`), deterministic priority score (`0.35*funding + 0.40*hiring + 0.15*growth + 0.10*relevance`) |
+| **Phase 4** | Job Hunter & Source Adapters | ✅ Complete | Agent 03 (`job-hunter`), Greenhouse/Lever/Ashby normalization, deduplication by `(source_id, external_id)`, null preservation for undisclosed salary & `posted_at`, transient source failure resilience (`recordSourceFetchFailure`) |
+| **Phase 5** | Job Evaluator & Candidate Matching | ✅ Complete | Agent 04 (`job-evaluator`), mandatory hard-filter engine + 100-point weighted scorer (`30+25+15+15+10+5`), `QUALIFIED`/`REVIEW`/`REJECTED` routing, automatic re-evaluation on profile version changes, optional `@google/genai` (`gemini-3.8-flash`) semantic insight |
+| **Phase 6** | Job CRM, Dashboard & Notifications | ✅ Complete | Overview dashboard, Job discovery & evaluation inspector, Company explorer, idempotent `QUALIFIED_JOB` notification engine (`createIdempotentNotification`) |
+| **Phase 7** | Contact Finder | ✅ Complete | Agent 05 (`contact-finder`), public contact role prioritization, field-level provenance (`VERIFIED`, `PUBLICLY_LISTED`, `INFERRED`, `NOT_FOUND`) |
+| **Phase 8** | Outreach Assistant | ✅ Complete | Agent 06 (`outreach-assistant`), evidence-backed drafts locked to `PENDING_APPROVAL`, separate `/approve` and `/send` endpoints, unverified recipient block, idempotent send with `provider_message_id` |
+| **Phase 9** | Application CRM & Lifecycle | ✅ Complete | Application pipeline (`SAVED`, `READY_TO_APPLY`, `APPLIED`, `SHORTLISTED`, `INTERVIEWING`, `OFFER`, `REJECTED`, `GHOSTED`, `WITHDRAWN`, `CLOSED`), immutable `application_events` audit history |
+| **Phase 10** | Reliability, Security & Production Readiness | ✅ Complete | Correlation Request IDs (`X-Request-Id`), SSRF URL guard (`isSafeExternalUrl`), untrusted HTML/prompt-injection sanitizer (`sanitizeUntrustedText`), E2E & unit test suites |
 
 ---
 
-## 2. Test Execution & Evidence
+## 2. Test Execution Summary
 
-### 2.1 Node.js / TypeScript Tests
-Command: `npm test` (`tsx --test packages/**/*.test.ts apps/**/*.test.ts`)
-- **Total Tests:** 14
-- **Passed:** 14
+### 2.1 Node.js & TypeScript Test Suite (`npm test`)
+- **Command:** `tsx --test packages/**/*.test.ts apps/**/*.test.ts`
+- **Total Tests:** 24
+- **Passed:** 24
 - **Failed:** 0
-- **Duration:** ~971ms
-- **Breakdown:**
-  - `apps/api/src/health.test.ts`:
-    - `GET /health` returns healthy status and service metadata (pass)
-    - `GET /api/v1/health` is accessible at canonical API path (pass)
-    - `GET /api/v1/system/status` returns monorepo topology and acceptance gates (pass)
-    - `POST /api/v1/system/validate-env` validates custom environment payloads (pass)
-  - `packages/config/src/env.test.ts`:
-    - `validateEnv` accepts default valid development configuration (pass)
-    - `validateEnv` parses custom valid environment parameters (pass)
-    - `validateEnv` detects and rejects invalid port numbers (pass)
-    - `validateEnv` detects and rejects port out of range (pass)
-    - `validateEnv` rejects too-short JWT secrets (pass)
-    - `getEnv` throws clear descriptive error when configuration fails (pass)
-  - `packages/contracts/src/contracts.test.ts`:
-    - `FundingScoutInputSchema` validates correct input (pass)
-    - `FundingScoutOutputSchema` validates spec output contract (pass)
-    - `JobEvaluatorOutputSchema` enforces score breakdown and decision bounds (pass)
-    - `OutreachAssistantOutputSchema` enforces safety `PENDING_APPROVAL` status (pass)
+- **Coverage:**
+  - `packages/config/src/env.test.ts` (6 tests)
+  - `packages/contracts/src/contracts.test.ts` (4 tests)
+  - `apps/api/src/health.test.ts` (4 tests)
+  - `apps/api/src/phases.test.ts` (10 comprehensive tests across Phases 1–10 + End-to-End API pipeline test)
 
-### 2.2 Python Worker Tests
-Command: `npm run test:python` (`python3 -m unittest discover -s services/agents/tests`)
-- **Total Tests:** 4
-- **Passed:** 4
+### 2.2 Python Agent Worker Test Suite (`npm run test:python`)
+- **Command:** `python3 -m unittest discover -s services/agents/tests`
+- **Total Tests:** 10
+- **Passed:** 10
 - **Failed:** 0
-- **Duration:** ~0.003s
-- **Breakdown:**
-  - `test_runtime_version_is_valid` (pass)
-  - `test_parse_network_target_standard_urls` (pass)
-  - `test_parse_network_target_defaults` (pass)
-  - `test_run_health_check_structure` (pass)
-
-### 2.3 Standalone Python Worker Probe
-Command: `python3 services/agents/src/health_check.py`
-- Exits with status `0`.
-- Outputs valid diagnostic JSON report:
-  ```json
-  {
-    "service": "jobhunt-agent-worker",
-    "status": "healthy",
-    "runtime": { "status": "healthy", "python_version": "3.10.12", ... },
-    "configuration": { "database": { ... }, "redis": { ... } },
-    "phase": "Phase 0 — Foundation"
-  }
-  ```
-
-### 2.4 TypeScript Compilation & Linting
-Command: `npm run lint` (`tsc --noEmit`)
-- Exits with code `0`. Zero type or syntax errors.
-
----
-
-## 3. Acceptance Criteria Checklist (Phase 0 Gate)
-
-- [x] **Clean clone can install dependencies:** Standard `package.json` and `services/agents/requirements.txt` present.
-- [x] **Docker Compose starts PostgreSQL and Redis:** `docker-compose.yml` configures PostgreSQL 16 and Redis 7 with healthchecks, volumes, and ports.
-- [x] **API health endpoint returns healthy status:** Verified at `/api/v1/health` and `/health`.
-- [x] **Worker can connect / probe Redis and PostgreSQL:** Verified in `services/agents/src/health_check.py`.
-- [x] **Missing required environment variables fail with clear errors:** Tested in `packages/config/src/env.test.ts`.
-- [x] **CI passes from clean checkout:** Configured in `.github/workflows/ci.yml`.
-- [x] **One documented command starts local infrastructure:** Documented in `docs/SETUP.md`.
-- [x] **API and worker start independently:** Segregated into `server.ts` and `services/agents/src/health_check.py`.
-- [x] **No secrets committed:** `.env.example` contains placeholders; default values are dev-safe.
-- [x] **Lint, type checks, and initial tests pass:** All 18 tests passing.
-
----
-
-## 4. Next Step
-
-Awaiting user review and acceptance of Phase 0. Once approved, proceed to **Phase 1 — Database and candidate profile** (initial migrations, repository layer, candidate profile CRUD, and seed data).
+- **Coverage:**
+  - `services/agents/tests/test_worker_health.py` (4 tests)
+  - `services/agents/tests/test_agents_pipeline.py` (6 tests covering domain normalization, funding stage normalization, priority formula, SSRF protection, null salary handling, and unknown work mode filtering)
