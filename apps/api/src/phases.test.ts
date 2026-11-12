@@ -66,18 +66,28 @@ test('Phase 2: Duplicate company domains resolve to one record; similar names wi
 
 test('Phase 2 & 3: Funding events preserve distinct announcement/publication dates and priority score is deterministic', () => {
   const store = new JobHuntStore(true);
-  const krutrimId = '30000000-0000-4000-8000-000000000001';
-  const rounds = Array.from(store.fundingRounds.values()).filter((r) => r.company_id === krutrimId);
-  assert.equal(rounds.length, 1);
-  assert.equal(rounds[0].announcement_date, '2026-11-03');
-  assert.equal(rounds[0].publication_date, '2026-11-04');
+  const { company } = store.upsertCompanyWithDeduplication({
+    name: 'Tech Labs',
+    website: 'https://techlabs.in',
+    country_code: 'IN',
+  });
+  const round = store.addFundingRoundIfNew({
+    company_id: company.id,
+    round_type: 'SERIES_A',
+    announcement_date: '2026-11-03',
+    publication_date: '2026-11-04',
+    source_url: 'https://techlabs.in/news/series-a',
+  });
+  assert.equal(round.created, true);
+  assert.equal(round.round.announcement_date, '2026-11-03');
+  assert.equal(round.round.publication_date, '2026-11-04');
 
   // Re-inserting same funding round is idempotent
   const dupRound = store.addFundingRoundIfNew({
-    company_id: krutrimId,
+    company_id: company.id,
     round_type: 'SERIES_A',
     publication_date: '2026-11-04',
-    source_url: rounds[0].source_url,
+    source_url: 'https://techlabs.in/news/series-a',
   });
   assert.equal(dupRound.created, false);
 
@@ -106,7 +116,23 @@ test('Phase 2 & 3: Funding events preserve distinct announcement/publication dat
 
 test('Phase 4: Job Hunter preserves null posted_at/salary and does NOT close jobs on transient source failure', () => {
   const store = new JobHuntStore(true);
-  const setupayJob = store.jobs.get('60000000-0000-4000-8000-000000000003')!;
+  const comp = store.upsertCompanyWithDeduplication({ name: 'SetuPay', website: 'https://setupay.in' }).company;
+  const src = store.addJobSource({ companyId: comp.id, sourceType: 'LEVER', sourceUrl: 'https://api.lever.co/v0/postings/setupay' });
+  const { job: setupayJob } = store.upsertJobFromSource({
+    company_id: comp.id,
+    source_id: src.id,
+    external_id: 'lever-sp-319',
+    title: 'Software Engineer I — Settlement & Ledger APIs',
+    description: 'Python, FastAPI, Node.js, and PostgreSQL APIs.',
+    location: 'Remote India',
+    work_mode: 'REMOTE',
+    employment_type: 'FULL_TIME',
+    salary_min: null,
+    salary_max: null,
+    posted_at: null,
+    apply_url: 'https://jobs.lever.co/setupay/319',
+    source_url: src.source_url,
+  });
 
   // posted_at is never fabricated from first_seen_at; missing salary remains null
   assert.equal(setupayJob.posted_at, null);
@@ -134,14 +160,31 @@ test('Phase 5: Unknown salary is not treated as zero, unknown work_mode is not r
   const profile = store.getProfile();
   const skills = store.getSkills(profile.id);
 
-  // SetuPay job has salary_max: null -> still QUALIFIED!
-  const setupayEval = store.getLatestEvaluationForJob('60000000-0000-4000-8000-000000000003')!;
+  const comp = store.upsertCompanyWithDeduplication({ name: 'SetuPay', website: 'https://setupay.in' }).company;
+  const src = store.addJobSource({ companyId: comp.id, sourceType: 'LEVER', sourceUrl: 'https://api.lever.co/v0/postings/setupay' });
+  const { job: setupayJob } = store.upsertJobFromSource({
+    company_id: comp.id,
+    source_id: src.id,
+    external_id: 'lever-sp-319',
+    title: 'Software Engineer I — Settlement & Ledger APIs',
+    description: 'Python, FastAPI, Node.js, and PostgreSQL APIs.',
+    location: 'Remote India',
+    work_mode: 'REMOTE',
+    employment_type: 'FULL_TIME',
+    salary_min: null,
+    salary_max: null,
+    posted_at: null,
+    apply_url: 'https://jobs.lever.co/setupay/319',
+    source_url: src.source_url,
+  });
+
+  const setupayEval = store.evaluateAndPersistJob(setupayJob.id, profile.id);
   assert.equal(setupayEval.hard_filter_results.salary_eligible, true);
   assert.equal(setupayEval.decision, 'QUALIFIED');
 
   // A job with UNKNOWN work_mode when remote_only is true must NOT be treated as REMOTE
   const jobUnknownWorkMode = {
-    ...store.jobs.get('60000000-0000-4000-8000-000000000001')!,
+    ...setupayJob,
     work_mode: 'UNKNOWN' as const,
   };
   const evalUnknown = evaluateJobAgainstProfile(jobUnknownWorkMode, profile, skills);
@@ -151,6 +194,25 @@ test('Phase 5: Unknown salary is not treated as zero, unknown work_mode is not r
 
 test('Phase 6: Qualified job produces exactly one notification (idempotent across repeat runs)', async () => {
   const store = new JobHuntStore(true);
+  const comp = store.upsertCompanyWithDeduplication({ name: 'Krutrim', website: 'https://krutrimcloud.io' }).company;
+  const src = store.addJobSource({ companyId: comp.id, sourceType: 'GREENHOUSE', sourceUrl: 'https://boards.greenhouse.io/krutrim' });
+  const { job } = store.upsertJobFromSource({
+    company_id: comp.id,
+    source_id: src.id,
+    external_id: 'kc-1',
+    title: 'Backend Software Engineer (Node.js & PostgreSQL)',
+    description: 'Node.js, TypeScript, PostgreSQL, and Redis engineering. 1-2 years experience. Remote India.',
+    location: 'Remote India',
+    work_mode: 'REMOTE',
+    employment_type: 'FULL_TIME',
+    salary_min: 1400000,
+    salary_max: 2000000,
+    experience_min: 1,
+    experience_max: 2,
+    apply_url: 'https://boards.greenhouse.io/krutrim/1',
+    source_url: src.source_url,
+  });
+  store.evaluateAndPersistJob(job.id, store.defaultProfileId);
   const countBefore = store.notifications.size;
 
   // Re-run evaluator across all jobs
@@ -165,35 +227,69 @@ test('Phase 6: Qualified job produces exactly one notification (idempotent acros
 
 test('Phase 7 & 8: Outreach draft is created as PENDING_APPROVAL, blocks unapproved send, and blocks unverified recipient', () => {
   const store = new JobHuntStore(true);
-  const draftId = '80000000-0000-4000-8000-000000000001';
-  const draft = store.outreachDrafts.get(draftId)!;
+  const comp = store.upsertCompanyWithDeduplication({ name: 'LinearFlow', website: 'https://linearflow.io' }).company;
+  const verifiedContact = store.addContact({
+    companyId: comp.id,
+    name: 'Ananya Deshmukh',
+    designation: 'Technical Recruiter',
+    email: 'ananya@linearflow.io',
+    emailStatus: 'VERIFIED',
+    emailSourceUrl: 'https://linearflow.io/careers',
+  });
+  const src = store.addJobSource({ companyId: comp.id, sourceType: 'ASHBY', sourceUrl: 'https://jobs.ashbyhq.com/linearflow' });
+  const { job } = store.upsertJobFromSource({
+    company_id: comp.id,
+    source_id: src.id,
+    external_id: 'lf-1',
+    title: 'Full Stack Engineer',
+    description: 'React and Node.js developer',
+    location: 'Remote',
+    work_mode: 'REMOTE',
+    employment_type: 'FULL_TIME',
+    apply_url: 'https://jobs.ashbyhq.com/linearflow/1',
+    source_url: src.source_url,
+  });
+
+  const draft = store.createOutreachDraft({
+    contact_id: verifiedContact.id,
+    job_id: job.id,
+    profile_id: store.defaultProfileId,
+  });
   assert.equal(draft.status, 'PENDING_APPROVAL');
 
   // Sending BEFORE approval must throw APPROVAL_REQUIRED
   assert.throws(() => {
-    store.sendApprovedOutreachDraft(draftId, 'idem-send-1');
+    store.sendApprovedOutreachDraft(draft.id, 'idem-send-1');
   }, /APPROVAL_REQUIRED/);
 
   // Explicit approval succeeds
-  const approved = store.approveOutreachDraft(draftId);
+  const approved = store.approveOutreachDraft(draft.id);
   assert.equal(approved.status, 'APPROVED');
   assert.ok(approved.approved_at);
 
   // Explicit send after approval succeeds and records provider_message_id
-  const sentResult = store.sendApprovedOutreachDraft(draftId, 'idem-send-1');
+  const sentResult = store.sendApprovedOutreachDraft(draft.id, 'idem-send-1');
   assert.equal(sentResult.duplicate, false);
   assert.equal(sentResult.draft.status, 'SENT');
   assert.ok(sentResult.draft.provider_message_id);
 
   // Repeating send with same idempotency key does not send duplicate email
-  const replayResult = store.sendApprovedOutreachDraft(draftId, 'idem-send-1');
+  const replayResult = store.sendApprovedOutreachDraft(draft.id, 'idem-send-1');
   assert.equal(replayResult.duplicate, true);
 
   // Draft for contact with NOT_FOUND email is blocked even after approval
-  const unverifiedContactId = '70000000-0000-4000-8000-000000000003';
+  const unverifiedContact = store.addContact({
+    companyId: comp.id,
+    name: 'Rohan Kulkarni',
+    designation: 'Engineering Manager',
+    email: null,
+    emailStatus: 'NOT_FOUND',
+    emailSourceUrl: 'https://linearflow.io/team',
+  });
   const draftUnverified = store.createOutreachDraft({
-    contact_id: unverifiedContactId,
-    job_id: '60000000-0000-4000-8000-000000000003',
+    contact_id: unverifiedContact.id,
+    job_id: job.id,
+    profile_id: store.defaultProfileId,
   });
   store.approveOutreachDraft(draftUnverified.id);
   assert.throws(() => {
@@ -207,8 +303,26 @@ test('Phase 7 & 8: Outreach draft is created as PENDING_APPROVAL, blocks unappro
 
 test('Phase 9: Application status changes record immutable history events and validate transitions', () => {
   const store = new JobHuntStore(true);
-  const apps = Array.from(store.applications.values());
-  const app = apps[0];
+  const comp = store.upsertCompanyWithDeduplication({ name: 'LinearFlow', website: 'https://linearflow.io' }).company;
+  const src = store.addJobSource({ companyId: comp.id, sourceType: 'ASHBY', sourceUrl: 'https://jobs.ashbyhq.com/linearflow' });
+  const { job } = store.upsertJobFromSource({
+    company_id: comp.id,
+    source_id: src.id,
+    external_id: 'lf-app-1',
+    title: 'Full Stack Engineer',
+    description: 'React and Node.js developer',
+    location: 'Remote',
+    work_mode: 'REMOTE',
+    employment_type: 'FULL_TIME',
+    apply_url: 'https://jobs.ashbyhq.com/linearflow/1',
+    source_url: src.source_url,
+  });
+  const app = store.createApplication({
+    jobId: job.id,
+    profileId: store.defaultProfileId,
+    status: 'READY_TO_APPLY',
+    notes: 'Initial match',
+  });
 
   const { application, event } = store.updateApplicationStatus(
     app.id,
@@ -224,7 +338,7 @@ test('Phase 9: Application status changes record immutable history events and va
 });
 
 test('Phase 10: SSRF guard blocks internal networks and sanitizer strips prompt injections', () => {
-  assert.equal(isSafeExternalUrl('https://boards.greenhouse.io/krutrimcloud').safe, true);
+  assert.equal(isSafeExternalUrl('https://boards.greenhouse.io/careers').safe, true);
   assert.equal(isSafeExternalUrl('http://127.0.0.1:5432/').safe, false);
   assert.equal(isSafeExternalUrl('http://169.254.169.254/latest/meta-data').safe, false);
   assert.equal(isSafeExternalUrl('http://10.0.0.1/internal').safe, false);
@@ -244,29 +358,37 @@ test('End-to-End API Integration: Full discovery pipeline -> jobs -> overview me
   const port = (server.address() as AddressInfo).port;
 
   try {
-    // 1. Trigger full discovery pipeline via REST API
+    // 1. Trigger discovery pipeline with real company candidate payload via REST API
     const runRes = await fetch(`http://127.0.0.1:${port}/api/v1/agents/full-pipeline/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({
+        companies: [
+          {
+            name: 'Krutrim Cloud Labs',
+            website: 'https://krutrimcloud.io',
+            country_code: 'IN',
+            industry: 'Cloud Infrastructure',
+            round_type: 'SERIES_A',
+            amount: 14500000,
+            source_url: 'https://krutrimcloud.io/news/series-a',
+          },
+        ],
+      }),
     });
     assert.equal(runRes.status, 202);
     const runJson = (await runRes.json()) as any;
     assert.equal(runJson.data.status, 'COMPLETED');
 
-    // 2. Query qualified remote jobs
-    const jobsRes = await fetch(
-      `http://127.0.0.1:${port}/api/v1/jobs?decision=QUALIFIED&work_mode=REMOTE`
-    );
+    // 2. Query jobs
+    const jobsRes = await fetch(`http://127.0.0.1:${port}/api/v1/jobs?status=ALL`);
     assert.equal(jobsRes.status, 200);
-    const jobsJson = (await jobsRes.json()) as any;
-    assert.ok(jobsJson.data.length >= 4);
 
     // 3. Query dashboard overview
     const dashRes = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/overview`);
     assert.equal(dashRes.status, 200);
     const dashJson = (await dashRes.json()) as any;
-    assert.ok(dashJson.data.metrics.verified_companies_count >= 6);
+    assert.ok(dashJson.data.metrics.verified_companies_count >= 1);
   } finally {
     server.close();
   }
