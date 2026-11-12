@@ -11,12 +11,32 @@ import {
 } from './services/coreEngine.ts';
 import { createApiApp } from './app.ts';
 
-// ============================================================================
-// Phase 1 Tests: Candidate Profile, Versioning, Unique Constraints & Nulls
-// ============================================================================
+function seedProfileForEval(store: JobHuntStore) {
+  const profile = store.updateProfile(store.defaultUserId, {
+    full_name: 'Candidate',
+    headline: 'Backend Engineer',
+    experience_years: 1.5,
+    resume_text: 'Node.js TypeScript PostgreSQL APIs',
+    preferences: {
+      target_roles: ['Backend Developer', 'Software Engineer'],
+      geographies: ['IN', 'US'],
+      remote_only: true,
+      minimum_salary: 700000,
+      salary_currency: 'INR',
+      maximum_experience: 2,
+      telegram_alerts_enabled: false,
+      telegram_chat_id: '',
+    },
+  });
+  store.addCandidateSkill(profile.id, 'Node.js', 'ADVANCED', 1.5);
+  store.addCandidateSkill(profile.id, 'TypeScript', 'ADVANCED', 1.5);
+  store.addCandidateSkill(profile.id, 'PostgreSQL', 'ADVANCED', 1.5);
+  store.addCandidateSkill(profile.id, 'Python', 'INTERMEDIATE', 1);
+  return store.getProfile();
+}
 
 test('Phase 1: Candidate profile increments version on update and rejects duplicate normalized skills', () => {
-  const store = new JobHuntStore(true);
+  const store = new JobHuntStore();
   const initial = store.getProfile();
   assert.equal(initial.profile_version, 1);
 
@@ -25,19 +45,14 @@ test('Phase 1: Candidate profile increments version on update and rejects duplic
   });
   assert.equal(updated.profile_version, 2);
 
-  // Attempting to add duplicate normalized skill ('node.js' vs 'NodeJS') must throw UNIQUE_VIOLATION
+  store.addCandidateSkill(initial.id, 'Node.js', 'ADVANCED', 2);
   assert.throws(() => {
     store.addCandidateSkill(initial.id, 'NodeJS', 'ADVANCED', 2);
   }, /UNIQUE_VIOLATION/);
 });
 
-// ============================================================================
-// Phase 2 & 3 Tests: Funding Scout, Domain Deduplication & Priority Scoring
-// ============================================================================
-
 test('Phase 2: Duplicate company domains resolve to one record; similar names with different domains are NOT merged', () => {
-  const store = new JobHuntStore(false);
-
+  const store = new JobHuntStore();
   const c1 = store.upsertCompanyWithDeduplication({
     name: 'Apex Cloud Technologies',
     website: 'https://www.apexcloud.io/about',
@@ -45,7 +60,6 @@ test('Phase 2: Duplicate company domains resolve to one record; similar names wi
   });
   assert.equal(c1.created, true);
 
-  // Same normalized domain ('apexcloud.io') must resolve to the existing company
   const c1Dup = store.upsertCompanyWithDeduplication({
     name: 'Apex Cloud Inc.',
     website: 'https://apexcloud.io',
@@ -54,7 +68,6 @@ test('Phase 2: Duplicate company domains resolve to one record; similar names wi
   assert.equal(c1Dup.created, false);
   assert.equal(c1Dup.company.id, c1.company.id);
 
-  // Similar name with DIFFERENT domain ('apexcloud.de') must NOT be merged
   const c2DiffDomain = store.upsertCompanyWithDeduplication({
     name: 'Apex Cloud GmbH',
     website: 'https://apexcloud.de',
@@ -65,7 +78,7 @@ test('Phase 2: Duplicate company domains resolve to one record; similar names wi
 });
 
 test('Phase 2 & 3: Funding events preserve distinct announcement/publication dates and priority score is deterministic', () => {
-  const store = new JobHuntStore(true);
+  const store = new JobHuntStore();
   const { company } = store.upsertCompanyWithDeduplication({
     name: 'Tech Labs',
     website: 'https://techlabs.in',
@@ -82,7 +95,6 @@ test('Phase 2 & 3: Funding events preserve distinct announcement/publication dat
   assert.equal(round.round.announcement_date, '2026-11-03');
   assert.equal(round.round.publication_date, '2026-11-04');
 
-  // Re-inserting same funding round is idempotent
   const dupRound = store.addFundingRoundIfNew({
     company_id: company.id,
     round_type: 'SERIES_A',
@@ -110,12 +122,8 @@ test('Phase 2 & 3: Funding events preserve distinct announcement/publication dat
   assert.equal(p1.priority, p2.priority);
 });
 
-// ============================================================================
-// Phase 4 Tests: Job Hunter Deduplication, Null Preservation & Transient Outage
-// ============================================================================
-
 test('Phase 4: Job Hunter preserves null posted_at/salary and does NOT close jobs on transient source failure', () => {
-  const store = new JobHuntStore(true);
+  const store = new JobHuntStore();
   const comp = store.upsertCompanyWithDeduplication({ name: 'SetuPay', website: 'https://setupay.in' }).company;
   const src = store.addJobSource({ companyId: comp.id, sourceType: 'LEVER', sourceUrl: 'https://api.lever.co/v0/postings/setupay' });
   const { job: setupayJob } = store.upsertJobFromSource({
@@ -134,30 +142,21 @@ test('Phase 4: Job Hunter preserves null posted_at/salary and does NOT close job
     source_url: src.source_url,
   });
 
-  // posted_at is never fabricated from first_seen_at; missing salary remains null
   assert.equal(setupayJob.posted_at, null);
   assert.equal(setupayJob.salary_min, null);
   assert.equal(setupayJob.salary_max, null);
   assert.ok(setupayJob.first_seen_at);
 
-  // Simulate transient fetch failure on source
-  const sourceId = setupayJob.source_id;
-  const updatedSource = store.recordSourceFetchFailure(sourceId, 'HTTP 503 Service Unavailable');
+  const updatedSource = store.recordSourceFetchFailure(setupayJob.source_id, 'HTTP 503 Service Unavailable');
   assert.equal(updatedSource.failure_count, 1);
-  assert.equal(updatedSource.status, 'HEALTHY'); // 1 failure does not mark source failed
-
-  // Active jobs from that source remain ACTIVE
+  assert.equal(updatedSource.status, 'HEALTHY');
   const jobAfterOutage = store.jobs.get(setupayJob.id)!;
   assert.equal(jobAfterOutage.status, 'ACTIVE');
 });
 
-// ============================================================================
-// Phase 5 & 6 Tests: Job Evaluator Hard Filters, Prompt Injection & Notifications
-// ============================================================================
-
 test('Phase 5: Unknown salary is not treated as zero, unknown work_mode is not remote, and mandatory hard filters override high scores', () => {
-  const store = new JobHuntStore(true);
-  const profile = store.getProfile();
+  const store = new JobHuntStore();
+  const profile = seedProfileForEval(store);
   const skills = store.getSkills(profile.id);
 
   const comp = store.upsertCompanyWithDeduplication({ name: 'SetuPay', website: 'https://setupay.in' }).company;
@@ -182,18 +181,15 @@ test('Phase 5: Unknown salary is not treated as zero, unknown work_mode is not r
   assert.equal(setupayEval.hard_filter_results.salary_eligible, true);
   assert.equal(setupayEval.decision, 'QUALIFIED');
 
-  // A job with UNKNOWN work_mode when remote_only is true must NOT be treated as REMOTE
-  const jobUnknownWorkMode = {
-    ...setupayJob,
-    work_mode: 'UNKNOWN' as const,
-  };
+  const jobUnknownWorkMode = { ...setupayJob, work_mode: 'UNKNOWN' as const };
   const evalUnknown = evaluateJobAgainstProfile(jobUnknownWorkMode, profile, skills);
   assert.equal(evalUnknown.hard_filter_results.work_mode_eligible, false);
   assert.equal(evalUnknown.decision, 'REJECTED');
 });
 
 test('Phase 6: Qualified job produces exactly one notification (idempotent across repeat runs)', async () => {
-  const store = new JobHuntStore(true);
+  const store = new JobHuntStore();
+  const profile = seedProfileForEval(store);
   const comp = store.upsertCompanyWithDeduplication({ name: 'Krutrim', website: 'https://krutrimcloud.io' }).company;
   const src = store.addJobSource({ companyId: comp.id, sourceType: 'GREENHOUSE', sourceUrl: 'https://boards.greenhouse.io/krutrim' });
   const { job } = store.upsertJobFromSource({
@@ -212,21 +208,16 @@ test('Phase 6: Qualified job produces exactly one notification (idempotent acros
     apply_url: 'https://boards.greenhouse.io/krutrim/1',
     source_url: src.source_url,
   });
-  store.evaluateAndPersistJob(job.id, store.defaultProfileId);
+  store.evaluateAndPersistJob(job.id, profile.id);
   const countBefore = store.notifications.size;
-
-  // Re-run evaluator across all jobs
   await store.triggerAgentRun('job-evaluator', {});
   const countAfter = store.notifications.size;
   assert.equal(countAfter, countBefore);
 });
 
-// ============================================================================
-// Phase 7 & 8 Tests: Contact Provenance & Outreach Approval / Send Safety Gates
-// ============================================================================
-
 test('Phase 7 & 8: Outreach draft is created as PENDING_APPROVAL, blocks unapproved send, and blocks unverified recipient', () => {
-  const store = new JobHuntStore(true);
+  const store = new JobHuntStore();
+  const profile = seedProfileForEval(store);
   const comp = store.upsertCompanyWithDeduplication({ name: 'LinearFlow', website: 'https://linearflow.io' }).company;
   const verifiedContact = store.addContact({
     companyId: comp.id,
@@ -253,31 +244,23 @@ test('Phase 7 & 8: Outreach draft is created as PENDING_APPROVAL, blocks unappro
   const draft = store.createOutreachDraft({
     contact_id: verifiedContact.id,
     job_id: job.id,
-    profile_id: store.defaultProfileId,
+    profile_id: profile.id,
   });
   assert.equal(draft.status, 'PENDING_APPROVAL');
 
-  // Sending BEFORE approval must throw APPROVAL_REQUIRED
-  assert.throws(() => {
-    store.sendApprovedOutreachDraft(draft.id, 'idem-send-1');
-  }, /APPROVAL_REQUIRED/);
-
-  // Explicit approval succeeds
+  assert.throws(() => { store.sendApprovedOutreachDraft(draft.id, 'idem-send-1'); }, /APPROVAL_REQUIRED/);
   const approved = store.approveOutreachDraft(draft.id);
   assert.equal(approved.status, 'APPROVED');
   assert.ok(approved.approved_at);
 
-  // Explicit send after approval succeeds and records provider_message_id
   const sentResult = store.sendApprovedOutreachDraft(draft.id, 'idem-send-1');
   assert.equal(sentResult.duplicate, false);
   assert.equal(sentResult.draft.status, 'SENT');
   assert.ok(sentResult.draft.provider_message_id);
 
-  // Repeating send with same idempotency key does not send duplicate email
   const replayResult = store.sendApprovedOutreachDraft(draft.id, 'idem-send-1');
   assert.equal(replayResult.duplicate, true);
 
-  // Draft for contact with NOT_FOUND email is blocked even after approval
   const unverifiedContact = store.addContact({
     companyId: comp.id,
     name: 'Rohan Kulkarni',
@@ -289,20 +272,14 @@ test('Phase 7 & 8: Outreach draft is created as PENDING_APPROVAL, blocks unappro
   const draftUnverified = store.createOutreachDraft({
     contact_id: unverifiedContact.id,
     job_id: job.id,
-    profile_id: store.defaultProfileId,
+    profile_id: profile.id,
   });
   store.approveOutreachDraft(draftUnverified.id);
-  assert.throws(() => {
-    store.sendApprovedOutreachDraft(draftUnverified.id);
-  }, /UNVERIFIED_RECIPIENT/);
+  assert.throws(() => { store.sendApprovedOutreachDraft(draftUnverified.id); }, /UNVERIFIED_RECIPIENT/);
 });
 
-// ============================================================================
-// Phase 9 & 10 Tests: Application Lifecycle, SSRF & Prompt-Injection Defense
-// ============================================================================
-
 test('Phase 9: Application status changes record immutable history events and validate transitions', () => {
-  const store = new JobHuntStore(true);
+  const store = new JobHuntStore();
   const comp = store.upsertCompanyWithDeduplication({ name: 'LinearFlow', website: 'https://linearflow.io' }).company;
   const src = store.addJobSource({ companyId: comp.id, sourceType: 'ASHBY', sourceUrl: 'https://jobs.ashbyhq.com/linearflow' });
   const { job } = store.upsertJobFromSource({
@@ -323,7 +300,6 @@ test('Phase 9: Application status changes record immutable history events and va
     status: 'READY_TO_APPLY',
     notes: 'Initial match',
   });
-
   const { application, event } = store.updateApplicationStatus(
     app.id,
     'APPLIED',
@@ -332,7 +308,6 @@ test('Phase 9: Application status changes record immutable history events and va
   assert.equal(application.status, 'APPLIED');
   assert.ok(application.applied_at);
   assert.equal(event.new_status, 'APPLIED');
-
   const history = store.getApplicationHistory(app.id);
   assert.ok(history.length >= 2);
 });
@@ -358,7 +333,6 @@ test('End-to-End API Integration: Full discovery pipeline -> jobs -> overview me
   const port = (server.address() as AddressInfo).port;
 
   try {
-    // 1. Trigger discovery pipeline with real company candidate payload via REST API
     const runRes = await fetch(`http://127.0.0.1:${port}/api/v1/agents/full-pipeline/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -371,6 +345,7 @@ test('End-to-End API Integration: Full discovery pipeline -> jobs -> overview me
             industry: 'Cloud Infrastructure',
             round_type: 'SERIES_A',
             amount: 14500000,
+            publication_date: '2026-11-10',
             source_url: 'https://krutrimcloud.io/news/series-a',
           },
         ],
@@ -379,12 +354,11 @@ test('End-to-End API Integration: Full discovery pipeline -> jobs -> overview me
     assert.equal(runRes.status, 202);
     const runJson = (await runRes.json()) as any;
     assert.equal(runJson.data.status, 'COMPLETED');
+    assert.equal(runJson.data.output.funding_scout.new_companies_created, 1);
 
-    // 2. Query jobs
     const jobsRes = await fetch(`http://127.0.0.1:${port}/api/v1/jobs?status=ALL`);
     assert.equal(jobsRes.status, 200);
 
-    // 3. Query dashboard overview
     const dashRes = await fetch(`http://127.0.0.1:${port}/api/v1/dashboard/overview`);
     assert.equal(dashRes.status, 200);
     const dashJson = (await dashRes.json()) as any;

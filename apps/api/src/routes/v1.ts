@@ -28,28 +28,28 @@ function sendError(
 // ============================================================================
 
 v1Router.post('/auth/login', (req: Request, res: Response) => {
-  const email = req.body?.email || 'parasmanikhunte@gmail.com';
+  const email = typeof req.body?.email === 'string' ? req.body.email : '';
   const profile = dbStore.getProfile();
   res.json({
     data: {
       user: {
         id: dbStore.defaultUserId,
         email,
-        timezone: 'Asia/Kolkata',
+        timezone: profile?.preferences ? 'UTC' : 'UTC',
       },
       profile,
-      token: 'session_jwt_jobhunt_os_personal',
+      token: 'session_token',
     },
   });
 });
 
 v1Router.post('/auth/register', (req: Request, res: Response) => {
-  const email = req.body?.email || 'parasmanikhunte@gmail.com';
+  const email = typeof req.body?.email === 'string' ? req.body.email : '';
   res.status(201).json({
     data: {
       id: dbStore.defaultUserId,
       email,
-      timezone: 'Asia/Kolkata',
+      timezone: 'UTC',
     },
   });
 });
