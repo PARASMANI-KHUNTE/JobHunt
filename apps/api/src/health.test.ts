@@ -58,9 +58,11 @@ test('GET /api/v1/system/status returns monorepo topology and acceptance gates',
 
     const json = await res.json() as any;
     assert.equal(json.project, 'JobHunt OS');
-    assert.equal(json.phase, 'Phase 0 — Foundation');
+    assert.equal(json.phase, 'Phases 0–10 implementation complete');
     assert.equal(json.acceptance_gates.docker_compose, true);
     assert.equal(json.acceptance_gates.worker_health_check, true);
+    assert.equal(json.acceptance_gates.scheduler_configured, true);
+    assert.equal(json.acceptance_gates.celery_tasks_configured, true);
   } finally {
     server.close();
   }

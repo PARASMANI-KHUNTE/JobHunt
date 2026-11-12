@@ -16,8 +16,14 @@ COPY services/agents/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY services/agents/ ./services/agents/
+COPY services/scheduler/ ./services/scheduler/
 COPY packages/contracts/ ./packages/contracts/
+
+# Run as a dedicated non-root user
+RUN useradd --create-home --uid 10001 appuser \
+    && chown -R appuser:appuser /app
+USER appuser
 
 WORKDIR /app/services/agents
 
-CMD ["python", "src/health_check.py"]
+CMD ["celery", "-A", "src.celery_app.celery:celery_app", "worker", "--loglevel=info"]
