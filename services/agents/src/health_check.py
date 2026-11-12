@@ -78,8 +78,10 @@ def run_health_check() -> dict:
                 "socket_reachable": redis_reachable,
             },
             "log_level": os.environ.get("LOG_LEVEL", "info"),
+            "celery_app": "src.celery_app.celery:celery_app",
+            "scheduler": "services/scheduler",
         },
-        "phase": "Phase 0 — Foundation",
+        "phase": "Phases 0–10 implementation complete",
     }
     return report
 

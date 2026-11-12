@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -7,12 +5,15 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-jobhunt}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jobhunt_dev_pwd}
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be defined in your environment or .env file}"
       POSTGRES_DB: ${POSTGRES_DB:-jobhunt_os}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Bind to loopback only: never expose the database to the LAN/Internet
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jobhunt} -d ${POSTGRES_DB:-jobhunt_os}"]
       interval: 5s
@@ -25,12 +26,19 @@ services:
     image: redis:7-alpine
     container_name: jobhunt_redis
     restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?REDIS_PASSWORD must be defined in your environment or .env file}"
+    # Redis must require authentication — an unauthenticated Redis is a remote code execution vector
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\""]
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      # Bind to loopback only: never expose Redis to the LAN/Internet
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -45,13 +53,18 @@ services:
     restart: unless-stopped
     ports:
       - "${PORT:-3000}:3000"
+    security_opt:
+      - no-new-privileges:true
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=${NODE_ENV:-production}
       - PORT=3000
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-jobhunt}:${POSTGRES_PASSWORD:-jobhunt_dev_pwd}@postgres:5432/${POSTGRES_DB:-jobhunt_os}
-      - REDIS_URL=redis://redis:6379/0
-      - JWT_SECRET=${JWT_SECRET:-dev-jwt-secret-replace-in-production-min-32-chars}
+      - DATABASE_URL=${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-jobhunt}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jobhunt_os}}
+      - REDIS_URL=${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      - "JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be defined in your environment or .env file}"
       - APP_URL=${APP_URL:-http://localhost:3000}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -66,10 +79,37 @@ services:
       dockerfile: infrastructure/docker/Dockerfile.worker
     container_name: jobhunt_worker
     restart: unless-stopped
+    command: celery -A src.celery_app.celery:celery_app worker --loglevel=info
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-jobhunt}:${POSTGRES_PASSWORD:-jobhunt_dev_pwd}@postgres:5432/${POSTGRES_DB:-jobhunt_os}
-      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-jobhunt}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jobhunt_os}}
+      - REDIS_URL=${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - jobhunt_net
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.worker
+    container_name: jobhunt_scheduler
+    restart: unless-stopped
+    command: celery -A src.celery_app.celery:celery_app beat --loglevel=info
+    environment:
+      - DATABASE_URL=${DOCKER_DATABASE_URL:-postgresql://${POSTGRES_USER:-jobhunt}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jobhunt_os}}
+      - REDIS_URL=${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       postgres:
         condition: service_healthy

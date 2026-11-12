@@ -6,11 +6,30 @@ import { v1Router } from './routes/v1.ts';
 export function createApiApp(): Express {
   const app = express();
 
+  // Disable the framework fingerprint header
+  app.disable('x-powered-by');
+
   app.use(express.json({ limit: '1mb' }));
+
+  // Baseline security headers (dependency-free)
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    if (process.env.NODE_ENV === 'production') {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
+    next();
+  });
 
   // Correlation Request ID and Structured Logging Middleware (Phase 10)
   app.use((req: Request, res: Response, next: NextFunction) => {
-    const requestId = req.headers['x-request-id']?.toString() || `req_${crypto.randomBytes(6).toString('hex')}`;
+    // Only accept sanitized request IDs to prevent log injection via forged headers
+    const rawId = req.headers['x-request-id']?.toString() || '';
+    const requestId = /^[A-Za-z0-9_-]{1,64}$/.test(rawId)
+      ? rawId
+      : `req_${crypto.randomBytes(6).toString('hex')}`;
     res.setHeader('X-Request-Id', requestId);
     const start = Date.now();
     res.on('finish', () => {

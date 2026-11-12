@@ -7,11 +7,34 @@ export const EnvSchema = z.object({
   APP_URL: z.string().url().default('http://localhost:3000'),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required').default('postgresql://jobhunt:jobhunt_dev_pwd@localhost:5432/jobhunt_os'),
   REDIS_URL: z.string().min(1, 'REDIS_URL is required').default('redis://localhost:6379/0'),
-  JWT_SECRET: z.string().min(16, 'JWT_SECRET must be at least 16 characters long').default('dev-jwt-secret-replace-in-production-min-32-chars'),
+  JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters long').default('dev-jwt-secret-replace-in-production-min-32-chars'),
   GEMINI_API_KEY: z.string().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_CHAT_ID: z.string().optional(),
-});
+}).refine(
+  (data) => {
+    if (data.NODE_ENV === 'production') {
+      return data.JWT_SECRET !== 'dev-jwt-secret-replace-in-production-min-32-chars';
+    }
+    return true;
+  },
+  {
+    message: 'Production environment must not use default placeholder JWT_SECRET',
+    path: ['JWT_SECRET'],
+  }
+).refine(
+  (data) => {
+    // Block the well-known development credentials from silently reaching production
+    if (data.NODE_ENV === 'production') {
+      return !data.DATABASE_URL.includes('jobhunt_dev_pwd');
+    }
+    return true;
+  },
+  {
+    message: 'Production environment must not use development database credentials',
+    path: ['DATABASE_URL'],
+  }
+);
 
 export type AppEnv = z.infer<typeof EnvSchema>;
 

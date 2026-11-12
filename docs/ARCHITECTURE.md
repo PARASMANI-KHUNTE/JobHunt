@@ -16,8 +16,8 @@ jobhunt-os/
 │   ├── api/          # Express + TypeScript REST API (business logic, validation, health)
 │   └── web/          # React + Vite + Tailwind UI (dashboard, CRM, pipelines)
 ├── services/
-│   ├── agents/       # Python workers (Funding Scout, Investigator, Hunter, Evaluator, etc.)
-│   └── scheduler/    # Celery beat & cadence scheduling
+│   ├── agents/       # Python Celery workers and deterministic agent pipeline helpers/tasks
+│   └── scheduler/    # Celery beat schedules and cadence definitions
 ├── packages/
 │   ├── config/       # Canonical Zod environment validation & runtime configuration
 │   ├── contracts/    # Pydantic & Zod input/output schemas for agents, API, and events
@@ -25,7 +25,7 @@ jobhunt-os/
 ├── infrastructure/
 │   └── docker/       # Dockerfile.api and Dockerfile.worker
 ├── docs/             # Architecture, Setup, and Implementation Status tracking
-├── docker-compose.yml# Production-grade PostgreSQL 16 + Redis 7 + API + Worker
+├── docker-compose.yml# PostgreSQL 16 + Redis 7 + API + Worker + Scheduler
 └── server.ts         # Unified development & full-stack server
 ```
 

@@ -11,8 +11,19 @@ const __dirname = path.dirname(__filename);
 async function startServer() {
   const envValidation = validateEnv();
   const env = envValidation.data;
-  const port = env?.PORT || Number(process.env.PORT) || 3000;
   const isProduction = process.env.NODE_ENV === 'production';
+
+  // Fail closed: never boot with an invalid environment configuration
+  if (!envValidation.success || !env) {
+    console.error('[JobHunt OS] Invalid environment configuration:');
+    console.error(JSON.stringify(envValidation.errors, null, 2));
+    if (isProduction) {
+      process.exit(1);
+    }
+    console.error('[JobHunt OS] Continuing in development with fallback values...');
+  }
+
+  const port = env?.PORT || Number(process.env.PORT) || 3000;
 
   // Instantiate the Express application with all API routes mounted
   const app = createApiApp();
@@ -38,7 +49,7 @@ async function startServer() {
   app.listen(port, '0.0.0.0', () => {
     console.log(`====================================================`);
     console.log(`  JobHunt OS Main Server Started`);
-    console.log(`  Status: ACTIVE (Phase 0 — Engineering Foundation)`);
+    console.log(`  Status: ACTIVE (Phases 0–10 implementation complete)`);
     console.log(`  URL: http://localhost:${port}`);
     console.log(`  API Health: http://localhost:${port}/api/v1/health`);
     console.log(`  System Status: http://localhost:${port}/api/v1/system/status`);

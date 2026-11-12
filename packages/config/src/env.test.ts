@@ -63,6 +63,17 @@ test('validateEnv rejects too-short JWT secrets', () => {
   assert.ok(result.errors?.JWT_SECRET);
 });
 
+test('validateEnv rejects default placeholder JWT_SECRET in production', () => {
+  const invalid = {
+    NODE_ENV: 'production',
+    JWT_SECRET: 'dev-jwt-secret-replace-in-production-min-32-chars',
+  };
+
+  const result = validateEnv(invalid);
+  assert.equal(result.success, false);
+  assert.ok(result.errors?.JWT_SECRET);
+});
+
 test('getEnv throws clear descriptive error when configuration fails', () => {
   assert.throws(() => {
     getEnv({
