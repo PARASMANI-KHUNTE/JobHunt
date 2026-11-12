@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: jobhunt_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-jobhunt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jobhunt_dev_pwd}
+      POSTGRES_DB: ${POSTGRES_DB:-jobhunt_os}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jobhunt} -d ${POSTGRES_DB:-jobhunt_os}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - jobhunt_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: jobhunt_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - jobhunt_net
+
+  api:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.api
+    container_name: jobhunt_api
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-jobhunt}:${POSTGRES_PASSWORD:-jobhunt_dev_pwd}@postgres:5432/${POSTGRES_DB:-jobhunt_os}
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET=${JWT_SECRET:-dev-jwt-secret-replace-in-production-min-32-chars}
+      - APP_URL=${APP_URL:-http://localhost:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - jobhunt_net
+
+  worker:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.worker
+    container_name: jobhunt_worker
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-jobhunt}:${POSTGRES_PASSWORD:-jobhunt_dev_pwd}@postgres:5432/${POSTGRES_DB:-jobhunt_os}
+      - REDIS_URL=redis://redis:6379/0
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - jobhunt_net
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  jobhunt_net:
+    driver: bridge

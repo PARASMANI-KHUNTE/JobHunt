@@ -1,0 +1,23 @@
+# Python Agent Worker Dockerfile for JobHunt OS
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY services/agents/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY services/agents/ ./services/agents/
+COPY packages/contracts/ ./packages/contracts/
+
+WORKDIR /app/services/agents
+
+CMD ["python", "src/health_check.py"]

@@ -1,0 +1,78 @@
+name: JobHunt OS CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  test-and-lint:
+    name: Lint, Type Check & Unit Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: jobhunt
+          POSTGRES_PASSWORD: jobhunt_dev_pwd
+          POSTGRES_DB: jobhunt_os
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Lint and Type Check (TypeScript)
+        run: npm run lint
+
+      - name: Run Node.js & TypeScript Test Suite
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://jobhunt:jobhunt_dev_pwd@localhost:5432/jobhunt_os
+          REDIS_URL: redis://localhost:6379/0
+          JWT_SECRET: dev-jwt-secret-replace-in-production-min-32-chars
+        run: npm test
+
+      - name: Run Python Worker Tests & Health Check
+        env:
+          DATABASE_URL: postgresql://jobhunt:jobhunt_dev_pwd@localhost:5432/jobhunt_os
+          REDIS_URL: redis://localhost:6379/0
+        run: |
+          npm run test:python
+          python3 services/agents/src/health_check.py
+
+      - name: Verify Production Build
+        run: npm run build
