@@ -1153,6 +1153,34 @@ export class JobHuntStore {
   // Phase 4: Job Upsert, Deduplication & Source Failure Resilience
   // ==========================================================================
 
+  private normalizeJobKeyUrl(url: string | null | undefined): string | null {
+    if (!url) return null;
+    try {
+      const parsed = new URL(url.trim());
+      parsed.hash = '';
+      const trackingParams = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'gh_jid', 'lever-origin'];
+      for (const p of trackingParams) parsed.searchParams.delete(p);
+      const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+      return `${parsed.hostname.toLowerCase()}${pathname}${parsed.search ? `?${parsed.searchParams.toString()}` : ''}`;
+    } catch {
+      return url.trim().toLowerCase().replace(/\/+$/, '');
+    }
+  }
+
+  private isLikelySameJobPosting(existing: JobRecord, input: { title: string; apply_url?: string | null; description_hash: string }): boolean {
+    const normalizedInputTitle = input.title.toLowerCase().trim();
+    const applyA = this.normalizeJobKeyUrl(existing.apply_url);
+    const applyB = this.normalizeJobKeyUrl(input.apply_url ?? null);
+    if (applyA && applyB && applyA === applyB) return true;
+
+    // Fallback dedupe for seeded/manual jobs vs live ATS jobs where external IDs differ
+    if (existing.normalized_title === normalizedInputTitle) {
+      if (!applyA || !applyB) return true;
+      if (existing.description_hash === input.description_hash) return true;
+    }
+    return false;
+  }
+
   public upsertJobFromSource(input: {
     company_id: string;
     source_id: string;
@@ -1205,6 +1233,50 @@ export class JobHuntStore {
         this.jobs.set(updated.id, updated);
         return { job: updated, outcome: changed ? 'UPDATED' : 'UNCHANGED' };
       }
+    }
+
+    // Cross-source/cross-id dedupe: prevent duplicate postings for the same company
+    // (e.g. seeded jobs vs live ATS jobs with different external IDs, or reposted links).
+    for (const existing of this.jobs.values()) {
+      if (existing.company_id !== input.company_id) continue;
+      if (!this.isLikelySameJobPosting(existing, { title: input.title, apply_url: input.apply_url, description_hash: descHash })) {
+        continue;
+      }
+
+      const incomingExternalId = input.external_id?.trim();
+      const changed =
+        existing.description_hash !== descHash ||
+        existing.title !== input.title.trim() ||
+        (!existing.external_id && Boolean(incomingExternalId)) ||
+        (Boolean(input.apply_url) && !existing.apply_url);
+
+      const updated: JobRecord = {
+        ...existing,
+        // Prefer keeping a stable record but enrich missing identifiers/fields.
+        external_id: existing.external_id || incomingExternalId || existing.external_id,
+        title: input.title.trim() || existing.title,
+        normalized_title: (input.title || existing.title).toLowerCase().trim(),
+        description: input.description || existing.description,
+        description_hash: descHash || existing.description_hash,
+        location: input.location !== undefined ? input.location : existing.location,
+        country_code: input.country_code !== undefined ? input.country_code : existing.country_code,
+        work_mode: input.work_mode && input.work_mode !== 'UNKNOWN' ? input.work_mode : existing.work_mode,
+        employment_type: input.employment_type && input.employment_type !== 'UNKNOWN' ? input.employment_type : existing.employment_type,
+        salary_min: input.salary_min !== undefined ? input.salary_min : existing.salary_min,
+        salary_max: input.salary_max !== undefined ? input.salary_max : existing.salary_max,
+        salary_currency: input.salary_currency !== undefined ? input.salary_currency : existing.salary_currency,
+        experience_min: input.experience_min !== undefined ? input.experience_min : existing.experience_min,
+        experience_max: input.experience_max !== undefined ? input.experience_max : existing.experience_max,
+        posted_at: input.posted_at ?? existing.posted_at,
+        apply_url: input.apply_url ?? existing.apply_url,
+        source_url: input.source_url ?? existing.source_url,
+        last_seen_at: now,
+        last_verified_open_at: now,
+        raw_data: { ...(existing.raw_data || {}), ...(input.raw_data || {}), deduped_from_external_id: incomingExternalId || null },
+        updated_at: changed ? now : existing.updated_at,
+      };
+      this.jobs.set(updated.id, updated);
+      return { job: updated, outcome: changed ? 'UPDATED' : 'UNCHANGED' };
     }
 
     const created: JobRecord = {
