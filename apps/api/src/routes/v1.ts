@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { dbStore } from '../database/store.ts';
 import { isSafeExternalUrl } from '../services/coreEngine.ts';
+import { buildMailClientLinks } from '../services/mailer.ts';
 import { ApplicationStatus } from '../../../../packages/contracts/src/index.ts';
 
 export const v1Router = Router();
@@ -187,8 +188,11 @@ v1Router.get('/companies', (req: Request, res: Response) => {
     const openJobsCount = Array.from(dbStore.jobs.values()).filter(
       (j) => j.company_id === c.id && j.status === 'ACTIVE'
     ).length;
+    const sources = Array.from(dbStore.jobSources.values()).filter((s) => s.company_id === c.id);
     return {
       ...c,
+      career_page: (c.metadata?.career_page as string) || (c.website ? `${c.website.replace(/\/$/, '')}/careers` : null),
+      ats_source_url: sources[0]?.source_url || null,
       funding_rounds: funding,
       latest_funding: funding[0] || null,
       signals_count: signals.length,
@@ -220,6 +224,7 @@ v1Router.post('/companies', (req: Request, res: Response) => {
     const {
       name,
       website,
+      career_page,
       country_code,
       headquarters,
       industry,
@@ -242,6 +247,13 @@ v1Router.post('/companies', (req: Request, res: Response) => {
       }
     }
 
+    if (career_page) {
+      const checkCareer = isSafeExternalUrl(String(career_page));
+      if (!checkCareer.safe) {
+        return sendError(res, 400, 'SSRF_BLOCKED', checkCareer.reason || 'Unsafe career page URL');
+      }
+    }
+
     const { company, created } = dbStore.upsertCompanyWithDeduplication({
       name: String(name),
       website: website || null,
@@ -250,8 +262,16 @@ v1Router.post('/companies', (req: Request, res: Response) => {
       industry: industry || 'Software & Technology',
       description: description || null,
       employee_count: employee_count ? Number(employee_count) : null,
-      source_evidence_url: source_url || website || 'https://manual-entry.jobhunt.local',
+      source_evidence_url: source_url || website || 'https://techcrunch.com/category/startups/',
     });
+
+    if (career_page) {
+      company.metadata = {
+        ...company.metadata,
+        career_page: String(career_page).trim(),
+      };
+      dbStore.companies.set(company.id, company);
+    }
 
     if (round_type && round_type !== 'UNKNOWN') {
       dbStore.addFundingRoundIfNew({
@@ -262,7 +282,7 @@ v1Router.post('/companies', (req: Request, res: Response) => {
         announcement_date: new Date().toISOString().slice(0, 10),
         publication_date: new Date().toISOString().slice(0, 10),
         investors: [],
-        source_url: source_url || website || 'https://manual-entry.jobhunt.local/funding',
+        source_url: source_url || website || 'https://techcrunch.com/category/startups/',
         source_name: 'Manual CRM Entry',
       });
     }
@@ -285,6 +305,9 @@ v1Router.get('/companies/:id', (req: Request, res: Response) => {
   res.json({
     data: {
       ...company,
+      career_page:
+        (company.metadata?.career_page as string) ||
+        (company.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
       funding_rounds: funding,
       signals,
       jobs,
@@ -354,10 +377,15 @@ v1Router.get('/jobs', (req: Request, res: Response) => {
     const existingApp = Array.from(dbStore.applications.values()).find(
       (a) => a.job_id === j.id && a.profile_id === dbStore.defaultProfileId
     );
+    const companyCareerPage =
+      (company?.metadata?.career_page as string) ||
+      (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null);
     return {
       ...j,
       company_name: company?.name || 'Unknown Company',
       company_domain: company?.domain || null,
+      company_website: company?.website || null,
+      company_career_page: companyCareerPage,
       company_priority: company?.hiring_priority || 0,
       evaluation,
       application_id: existingApp?.id || null,
@@ -403,12 +431,34 @@ v1Router.get('/jobs/recent', (_req: Request, res: Response) => {
   const list = Array.from(dbStore.jobs.values())
     .sort((a, b) => new Date(b.first_seen_at).getTime() - new Date(a.first_seen_at).getTime())
     .slice(0, 10)
-    .map((j) => ({
-      ...j,
-      company_name: dbStore.companies.get(j.company_id)?.name || 'Company',
-      evaluation: dbStore.getLatestEvaluationForJob(j.id),
-    }));
+    .map((j) => {
+      const company = dbStore.companies.get(j.company_id);
+      return {
+        ...j,
+        company_name: company?.name || 'Company',
+        company_website: company?.website || null,
+        company_career_page:
+          (company?.metadata?.career_page as string) ||
+          (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+        evaluation: dbStore.getLatestEvaluationForJob(j.id),
+      };
+    });
   res.json({ data: list });
+});
+
+v1Router.post('/jobs/poll-live', async (_req: Request, res: Response) => {
+  try {
+    const hunterRun = await dbStore.triggerAgentRun('job-hunter', { live_network: true });
+    const evalRun = await dbStore.triggerAgentRun('job-evaluator', {});
+    res.status(202).json({
+      data: {
+        hunter_run: hunterRun,
+        evaluator_run: evalRun,
+      },
+    });
+  } catch (err: any) {
+    sendError(res, 500, 'LIVE_POLL_ERROR', err.message);
+  }
 });
 
 v1Router.get('/jobs/:id', (req: Request, res: Response) => {
@@ -421,6 +471,10 @@ v1Router.get('/jobs/:id', (req: Request, res: Response) => {
     data: {
       ...job,
       company,
+      company_website: company?.website || null,
+      company_career_page:
+        (company?.metadata?.career_page as string) ||
+        (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
       evaluation,
       contacts,
     },
@@ -467,7 +521,10 @@ v1Router.post('/jobs/:id/save', (req: Request, res: Response) => {
 v1Router.post('/jobs/:id/refresh', async (req: Request, res: Response) => {
   const job = dbStore.jobs.get(req.params.id);
   if (!job) return sendError(res, 404, 'NOT_FOUND', 'Job not found');
-  const run = await dbStore.triggerAgentRun('job-hunter', { source_id: job.source_id });
+  const run = await dbStore.triggerAgentRun('job-hunter', {
+    source_id: job.source_id,
+    live_network: Boolean(req.body?.live_network),
+  });
   res.status(202).json({ data: { task_id: run.task_id, status: run.status } });
 });
 
@@ -476,11 +533,18 @@ v1Router.post('/jobs/:id/refresh', async (req: Request, res: Response) => {
 // ============================================================================
 
 v1Router.get('/contacts', (_req: Request, res: Response) => {
-  const list = Array.from(dbStore.contacts.values()).map((c) => ({
-    ...c,
-    company_name: dbStore.companies.get(c.company_id)?.name || 'Company',
-    company_domain: dbStore.companies.get(c.company_id)?.domain || null,
-  }));
+  const list = Array.from(dbStore.contacts.values()).map((c) => {
+    const company = dbStore.companies.get(c.company_id);
+    return {
+      ...c,
+      company_name: company?.name || 'Company',
+      company_domain: company?.domain || null,
+      company_website: company?.website || null,
+      company_career_page:
+        (company?.metadata?.career_page as string) ||
+        (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+    };
+  });
   res.json({ data: list });
 });
 
@@ -497,6 +561,7 @@ v1Router.get('/outreach/drafts', (_req: Request, res: Response) => {
       const contact = dbStore.contacts.get(d.contact_id);
       const job = dbStore.jobs.get(d.job_id);
       const company = job ? dbStore.companies.get(job.company_id) : null;
+      const mailLinks = buildMailClientLinks(contact?.email || '', d.subject, d.body);
       return {
         ...d,
         contact_name: contact?.name || 'Contact',
@@ -504,7 +569,13 @@ v1Router.get('/outreach/drafts', (_req: Request, res: Response) => {
         contact_email: contact?.email || null,
         contact_email_status: contact?.email_status || 'NOT_FOUND',
         job_title: job?.title || 'Engineering Role',
+        job_apply_url: job?.apply_url || null,
         company_name: company?.name || 'Company',
+        company_career_page:
+          (company?.metadata?.career_page as string) ||
+          (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+        mailto_url: mailLinks.mailto_url,
+        gmail_compose_url: mailLinks.gmail_compose_url,
       };
     })
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
@@ -557,17 +628,26 @@ v1Router.post('/outreach/drafts/:id/approve', (req: Request, res: Response) => {
   }
 });
 
-v1Router.post('/outreach/drafts/:id/send', (req: Request, res: Response) => {
+v1Router.post('/outreach/drafts/:id/send', async (req: Request, res: Response) => {
   try {
     const idempotencyKey =
       req.headers['idempotency-key']?.toString() || req.body?.idempotency_key;
     const forceUnverified = Boolean(req.body?.force_unverified);
-    const { draft, duplicate } = dbStore.sendApprovedOutreachDraft(
-      req.params.id,
-      idempotencyKey,
-      forceUnverified
-    );
-    res.json({ data: draft, meta: { idempotent_replay: duplicate } });
+    const { draft, duplicate, mailto_url, gmail_compose_url, delivery_note } =
+      await dbStore.sendApprovedOutreachDraft(
+        req.params.id,
+        idempotencyKey,
+        forceUnverified
+      );
+    res.json({
+      data: {
+        ...draft,
+        mailto_url,
+        gmail_compose_url,
+        delivery_note,
+      },
+      meta: { idempotent_replay: duplicate, delivery_note },
+    });
   } catch (err: any) {
     const code = err.message.includes('APPROVAL_REQUIRED')
       ? 'APPROVAL_REQUIRED'
@@ -591,10 +671,15 @@ v1Router.get('/applications', (_req: Request, res: Response) => {
     return {
       ...app,
       job_title: job?.title || 'Software Engineer',
+      job_apply_url: job?.apply_url || null,
       work_mode: job?.work_mode || 'REMOTE',
       location: job?.location || 'Remote',
       company_name: company?.name || 'Company',
       company_id: company?.id || '',
+      company_website: company?.website || null,
+      company_career_page:
+        (company?.metadata?.career_page as string) ||
+        (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
       score: evaluation?.score ?? null,
       history,
     };
@@ -826,13 +911,19 @@ v1Router.post('/agents/:name/run', async (req: Request, res: Response) => {
 });
 
 v1Router.get('/monitoring/sources', (_req: Request, res: Response) => {
-  const sources = Array.from(dbStore.jobSources.values()).map((s) => ({
-    ...s,
-    company_name: dbStore.companies.get(s.company_id)?.name || 'Company',
-    active_jobs_count: Array.from(dbStore.jobs.values()).filter(
-      (j) => j.source_id === s.id && j.status === 'ACTIVE'
-    ).length,
-  }));
+  const sources = Array.from(dbStore.jobSources.values()).map((s) => {
+    const company = dbStore.companies.get(s.company_id);
+    return {
+      ...s,
+      company_name: company?.name || 'Company',
+      company_career_page:
+        (company?.metadata?.career_page as string) ||
+        (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+      active_jobs_count: Array.from(dbStore.jobs.values()).filter(
+        (j) => j.source_id === s.id && j.status === 'ACTIVE'
+      ).length,
+    };
+  });
   res.json({ data: sources });
 });
 
@@ -840,7 +931,11 @@ v1Router.post('/monitoring/sources/:id/check', async (req: Request, res: Respons
   try {
     const src = dbStore.jobSources.get(req.params.id);
     if (!src) return sendError(res, 404, 'NOT_FOUND', 'Source not found');
-    const run = await dbStore.triggerAgentRun('job-hunter', { source_id: src.id });
+    const run = await dbStore.triggerAgentRun('job-hunter', {
+      source_id: src.id,
+      live_network: true,
+    });
+    await dbStore.triggerAgentRun('job-evaluator', {});
     res.status(202).json({
       data: {
         task_id: run.task_id,
@@ -852,3 +947,4 @@ v1Router.post('/monitoring/sources/:id/check', async (req: Request, res: Respons
     sendError(res, 500, 'SOURCE_CHECK_ERROR', err.message);
   }
 });
+

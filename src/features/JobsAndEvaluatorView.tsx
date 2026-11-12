@@ -220,6 +220,44 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
                           <span aria-hidden="true">·</span>
                           <span>First seen: {job.first_seen_at.slice(0, 10)}</span>
                         </div>
+                        <div className="flex flex-wrap items-center gap-3 pt-1 text-xs">
+                          {job.company_career_page && (
+                            <a
+                              href={job.company_career_page}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-indigo-400 hover:text-indigo-300 hover:underline inline-flex items-center gap-1 font-medium"
+                            >
+                              <span>Careers Page</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                          {job.apply_url && (
+                            <a
+                              href={job.apply_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-slate-300 hover:text-white hover:underline inline-flex items-center gap-1"
+                            >
+                              <span>Direct Apply / ATS</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                          {job.company_website && (
+                            <a
+                              href={job.company_website}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-slate-400 hover:text-slate-200 hover:underline inline-flex items-center gap-1"
+                            >
+                              <span>Official Site</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                        </div>
                       </div>
 
                       <div className="text-right shrink-0 space-y-1">
@@ -251,7 +289,7 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
         <div className="lg:col-span-5 bg-slate-900/60 border border-slate-800 rounded-xl p-5 space-y-5">
           {selectedJob ? (
             <>
-              <div className="border-b border-slate-800 pb-4 space-y-2">
+              <div className="border-b border-slate-800 pb-4 space-y-2.5">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-xs text-slate-400">
@@ -277,11 +315,48 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
                   </div>
                 </div>
 
+                {/* External Links Bar: Careers Page, Direct Apply, Official Website */}
+                <div className="flex flex-wrap items-center gap-3 text-xs bg-slate-950/80 border border-slate-800/80 px-3 py-2 rounded-lg">
+                  {selectedJob.company_career_page && (
+                    <a
+                      href={selectedJob.company_career_page}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-indigo-400 hover:text-indigo-300 hover:underline font-medium inline-flex items-center gap-1"
+                    >
+                      <span>Company Careers Page</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                  {selectedJob.apply_url && (
+                    <a
+                      href={selectedJob.apply_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-emerald-400 hover:text-emerald-300 hover:underline font-medium inline-flex items-center gap-1"
+                    >
+                      <span>Apply on ATS</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                  {selectedJob.company_website && (
+                    <a
+                      href={selectedJob.company_website}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-slate-400 hover:text-slate-200 hover:underline inline-flex items-center gap-1"
+                    >
+                      <span>Official Website</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+
                 <p className="text-xs text-slate-300 leading-relaxed">
                   {selectedJob.description}
                 </p>
 
-                <div className="flex flex-wrap items-center gap-2 pt-2">
+                <div className="flex flex-wrap items-center gap-2 pt-1">
                   {selectedJob.application_status ? (
                     <span className="text-xs text-emerald-400 font-medium flex items-center gap-1">
                       <Check className="w-3.5 h-3.5" />
@@ -315,18 +390,6 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
                   >
                     Draft Outreach
                   </button>
-
-                  {selectedJob.apply_url && (
-                    <a
-                      href={selectedJob.apply_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3 py-1.5 text-xs text-slate-400 hover:text-white flex items-center gap-1 whitespace-nowrap shrink-0"
-                    >
-                      <span>Source URL</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  )}
                 </div>
               </div>
 
