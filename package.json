@@ -11,7 +11,7 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test": "tsx --test packages/**/*.test.ts apps/**/*.test.ts",
-    "test:python": "python3 -m unittest discover -s services/agents/tests"
+    "test:python": "node -e \"const { spawnSync } = require('child_process'); const py = process.platform === 'win32' ? 'python' : 'python3'; const res = spawnSync(py, ['-m', 'unittest', 'discover', '-s', 'services/agents/tests'], { stdio: 'inherit' }); process.exit(res.status ?? 0);\""
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -31,7 +31,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
