@@ -9,6 +9,8 @@ import {
   Play,
   Check,
   ArrowRight,
+  ExternalLink,
+  RefreshCw,
 } from 'lucide-react';
 import { JobsAndEvaluatorView } from './features/JobsAndEvaluatorView.tsx';
 import { CompaniesAndFundingView } from './features/CompaniesAndFundingView.tsx';
@@ -27,6 +29,7 @@ export default function App() {
   const [activeSection, setActiveSection] = useState<NavSection>('overview');
   const [loading, setLoading] = useState<boolean>(true);
   const [runningPipeline, setRunningPipeline] = useState<boolean>(false);
+  const [pollingLiveAts, setPollingLiveAts] = useState<boolean>(false);
   const [bannerMessage, setBannerMessage] = useState<string | null>(null);
 
   // CRM State loaded from /api/v1/*
@@ -104,17 +107,42 @@ export default function App() {
       const res = await fetch('/api/v1/agents/full-pipeline/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ live_network: true }),
       });
       if (!res.ok) throw new Error('Pipeline run failed');
       await loadAllCrmData();
       setBannerMessage(
-        'Full Discovery Pipeline executed: Funding Scout → Investigator → Job Hunter → Evaluator → Contact Finder completed with idempotent notifications.'
+        'Full Discovery Pipeline executed: Funding Scout → Investigator → Live ATS Job Hunter → Evaluator → Contact Finder completed with idempotent notifications.'
       );
     } catch (err: any) {
       setBannerMessage(`Pipeline error: ${err.message}`);
     } finally {
       setRunningPipeline(false);
+    }
+  };
+
+  // Real-Time Live ATS Poll (Greenhouse & Ashby Public APIs)
+  const handlePollLiveAts = async () => {
+    setPollingLiveAts(true);
+    setBannerMessage(null);
+    try {
+      const res = await fetch('/api/v1/jobs/poll-live', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) throw new Error('Live ATS poll failed');
+      const json = await res.json();
+      const inserted = json.data?.hunter_run?.output?.inserted ?? 0;
+      const updated = json.data?.hunter_run?.output?.updated ?? 0;
+      const liveFetched = json.data?.hunter_run?.output?.live_fetched ?? 0;
+      await loadAllCrmData();
+      setBannerMessage(
+        `Live ATS Poll completed over HTTP (Greenhouse & Ashby): ${liveFetched} live postings fetched, ${inserted} new jobs added, ${updated} existing jobs refreshed & evaluated.`
+      );
+    } catch (err: any) {
+      setBannerMessage(`Live ATS poll error: ${err.message}`);
+    } finally {
+      setPollingLiveAts(false);
     }
   };
 
@@ -227,7 +255,9 @@ export default function App() {
       const errJson = await res.json();
       throw new Error(errJson.error?.message || 'Send blocked by safety policy');
     }
+    const result = await res.json();
     await loadAllCrmData();
+    return result.data;
   };
 
   const handleUpdateProfile = async (payload: Record<string, any>) => {
@@ -269,7 +299,7 @@ export default function App() {
     await fetch(`/api/v1/agents/${agentName}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ live_network: agentName === 'job-hunter' }),
     });
     await loadAllCrmData();
   };
@@ -374,7 +404,17 @@ export default function App() {
             <span className="text-white font-semibold">{sectionLabels[activeSection]}</span>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              disabled={pollingLiveAts}
+              onClick={handlePollLiveAts}
+              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${pollingLiveAts ? 'animate-spin' : ''}`} />
+              <span>{pollingLiveAts ? 'Fetching Live ATS...' : 'Poll Live ATS Jobs'}</span>
+            </button>
+
             <button
               type="button"
               disabled={runningPipeline}
@@ -506,6 +546,41 @@ export default function App() {
                                   Matched: {job.evaluation?.matched_skills?.join(', ')}
                                 </span>
                               </div>
+                              <div className="flex flex-wrap items-center gap-3 pt-1 text-xs">
+                                {job.company_career_page && (
+                                  <a
+                                    href={job.company_career_page}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-indigo-400 hover:text-indigo-300 hover:underline inline-flex items-center gap-1 font-medium"
+                                  >
+                                    <span>Careers Page</span>
+                                    <ExternalLink className="w-3 h-3" />
+                                  </a>
+                                )}
+                                {job.apply_url && (
+                                  <a
+                                    href={job.apply_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-slate-300 hover:text-white hover:underline inline-flex items-center gap-1"
+                                  >
+                                    <span>Direct Apply / ATS</span>
+                                    <ExternalLink className="w-3 h-3" />
+                                  </a>
+                                )}
+                                {job.company_website && (
+                                  <a
+                                    href={job.company_website}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-slate-400 hover:text-slate-200 hover:underline inline-flex items-center gap-1"
+                                  >
+                                    <span>Website</span>
+                                    <ExternalLink className="w-3 h-3" />
+                                  </a>
+                                )}
+                              </div>
                             </div>
 
                             <div className="flex items-center gap-3 shrink-0">
@@ -577,10 +652,7 @@ export default function App() {
               {activeSection === 'jobs' && (
                 <JobsAndEvaluatorView
                   jobs={jobs}
-                  onRefreshJobs={async () => {
-                    await handleTriggerAgent('job-hunter');
-                    await handleTriggerAgent('job-evaluator');
-                  }}
+                  onRefreshJobs={handlePollLiveAts}
                   onEvaluateJob={handleEvaluateJob}
                   onSaveJobToPipeline={handleSaveJobToPipeline}
                   onCreateDraftForJob={handleCreateDraftForJob}

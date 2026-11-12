@@ -23,6 +23,7 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
   // Add company form state
   const [name, setName] = useState('');
   const [website, setWebsite] = useState('');
+  const [careerPage, setCareerPage] = useState('');
   const [countryCode, setCountryCode] = useState('IN');
   const [headquarters, setHeadquarters] = useState('');
   const [industry, setIndustry] = useState('Developer Tools & Cloud');
@@ -54,6 +55,7 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
       await onAddCompany({
         name: name.trim(),
         website: website.trim() || null,
+        career_page: careerPage.trim() || null,
         country_code: countryCode,
         headquarters: headquarters.trim() || null,
         industry,
@@ -63,6 +65,7 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
       });
       setName('');
       setWebsite('');
+      setCareerPage('');
       setHeadquarters('');
       setShowAddForm(false);
       setFeedback('Company added & deduplicated by canonical domain.');
@@ -175,7 +178,7 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
                 required
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. HyperScale AI"
+                placeholder="e.g. Retool"
                 className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100"
               />
             </div>
@@ -185,7 +188,17 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
                 type="url"
                 value={website}
                 onChange={(e) => setWebsite(e.target.value)}
-                placeholder="https://hyperscale.example.com"
+                placeholder="https://retool.com"
+                className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 font-mono"
+              />
+            </div>
+            <div>
+              <label className="block text-slate-300 mb-1 font-medium">Careers Page URL</label>
+              <input
+                type="url"
+                value={careerPage}
+                onChange={(e) => setCareerPage(e.target.value)}
+                placeholder="https://retool.com/careers"
                 className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 font-mono"
               />
             </div>
@@ -277,12 +290,25 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
               {filtered.map((comp) => {
                 const rf = comp.latest_funding;
                 const pb = comp.metadata?.priority_breakdown;
+                const careerUrl = comp.career_page || comp.metadata?.career_page;
                 return (
                   <tr key={comp.id} className="hover:bg-slate-800/30 transition-colors">
                     <td className="py-3.5 px-4">
                       <div className="font-semibold text-white">{comp.name}</div>
-                      <div className="text-slate-400 flex items-center gap-1.5 mt-0.5">
-                        <span className="font-mono text-[11px]">{comp.domain || 'No domain'}</span>
+                      <div className="text-slate-400 flex flex-wrap items-center gap-1.5 mt-0.5">
+                        {comp.website ? (
+                          <a
+                            href={comp.website}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="font-mono text-[11px] text-indigo-400 hover:underline inline-flex items-center gap-1"
+                          >
+                            <span>{comp.domain || comp.website}</span>
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        ) : (
+                          <span className="font-mono text-[11px]">{comp.domain || 'No domain'}</span>
+                        )}
                         <span aria-hidden="true">·</span>
                         <span>{comp.headquarters || comp.country_code || 'Global'}</span>
                       </div>
@@ -297,8 +323,22 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
                               ? ` · ${rf.currency || 'USD'} ${(rf.amount / 1_000_000).toFixed(1)}M`
                               : ' · Undisclosed'}
                           </div>
-                          <div className="text-[11px] text-slate-400 font-mono tabular-nums mt-0.5">
-                            Event: {rf.announcement_date || 'N/A'} · Published: {rf.publication_date}
+                          <div className="text-[11px] text-slate-400 font-mono tabular-nums mt-0.5 flex flex-wrap items-center gap-1.5">
+                            <span>Event: {rf.announcement_date || 'N/A'}</span>
+                            <span aria-hidden="true">·</span>
+                            {rf.source_url ? (
+                              <a
+                                href={rf.source_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-slate-300 hover:text-white hover:underline inline-flex items-center gap-1"
+                              >
+                                <span>{rf.source_name || 'Source'}</span>
+                                <ExternalLink className="w-2.5 h-2.5" />
+                              </a>
+                            ) : (
+                              <span>Published: {rf.publication_date}</span>
+                            )}
                           </div>
                         </div>
                       ) : (
@@ -306,23 +346,36 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
                       )}
                     </td>
 
-                    <td className="py-3.5 px-4">
+                    <td className="py-3.5 px-4 space-y-1">
                       <div className="text-slate-200">
                         ATS: <span className="font-mono">{comp.metadata?.ats_provider || 'UNKNOWN'}</span>
                         {' · '}
                         <span>{comp.open_jobs_count || 0} active roles</span>
                       </div>
-                      {comp.metadata?.career_page && (
-                        <a
-                          href={comp.metadata.career_page}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-[11px] text-indigo-400 hover:underline inline-flex items-center gap-1 mt-0.5 font-mono"
-                        >
-                          <span>{comp.metadata.career_page}</span>
-                          <ExternalLink className="w-2.5 h-2.5" />
-                        </a>
-                      )}
+                      <div className="flex flex-wrap items-center gap-3 text-[11px]">
+                        {careerUrl && (
+                          <a
+                            href={careerUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-indigo-400 hover:text-indigo-300 hover:underline inline-flex items-center gap-1 font-medium"
+                          >
+                            <span>Careers Page</span>
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        )}
+                        {comp.ats_source_url && (
+                          <a
+                            href={comp.ats_source_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-emerald-400 hover:text-emerald-300 hover:underline inline-flex items-center gap-1 font-mono"
+                          >
+                            <span>Live ATS API</span>
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        )}
+                      </div>
                     </td>
 
                     <td className="py-3.5 px-4 text-right font-mono tabular-nums text-slate-300">

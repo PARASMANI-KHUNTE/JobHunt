@@ -2,5 +2,7 @@
   "name": "JobHunt OS",
   "description": "Automated job-discovery and career CRM with verified funding signals, ATS monitoring, and candidate matching.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, Send, RefreshCw, ExternalLink, AlertTriangle, Plus } from 'lucide-react';
+import { Check, Send, RefreshCw, ExternalLink, AlertTriangle, Plus, Mail } from 'lucide-react';
 
 interface PipelineAndContactsProps {
   applications: any[];
@@ -12,7 +12,7 @@ interface PipelineAndContactsProps {
   onCreateDraft: (contactId: string, jobId: string) => Promise<void>;
   onUpdateDraft: (draftId: string, subject: string, body: string) => Promise<void>;
   onApproveDraft: (draftId: string) => Promise<void>;
-  onSendDraft: (draftId: string) => Promise<void>;
+  onSendDraft: (draftId: string) => Promise<any>;
 }
 
 const APPLICATION_STATUSES = [
@@ -103,7 +103,9 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
     setErrorMsg(null);
     try {
       await onApproveDraft(draftId);
-      setFeedback('Draft explicitly approved by user. You may now trigger the Send action.');
+      setFeedback(
+        'Draft explicitly approved by user. You can now click "Step 2: Explicit Send", "Open in Gmail", or "Open Mail App".'
+      );
     } catch (err: any) {
       setErrorMsg(err.message);
     } finally {
@@ -116,14 +118,32 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
     setFeedback(null);
     setErrorMsg(null);
     try {
-      await onSendDraft(draftId);
-      setFeedback('Outreach email dispatched with idempotency key and provider message ID.');
+      const resData = await onSendDraft(draftId);
+      setFeedback(
+        resData?.delivery_note ||
+          'Outreach email dispatched with idempotency key and provider message ID.'
+      );
     } catch (err: any) {
       setErrorMsg(err.message);
     } finally {
       setBusy(false);
     }
   };
+
+  // Compute live mailto & Gmail compose URLs from current edited subject/body
+  const currentRecipientEmail = selectedDraft?.contact_email || '';
+  const liveMailtoUrl = currentRecipientEmail
+    ? `mailto:${encodeURIComponent(currentRecipientEmail)}?subject=${encodeURIComponent(
+        editSubject || selectedDraft?.subject || ''
+      )}&body=${encodeURIComponent(editBody || selectedDraft?.body || '')}`
+    : null;
+  const liveGmailUrl = currentRecipientEmail
+    ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
+        currentRecipientEmail
+      )}&su=${encodeURIComponent(editSubject || selectedDraft?.subject || '')}&body=${encodeURIComponent(
+        editBody || selectedDraft?.body || ''
+      )}`
+    : null;
 
   return (
     <div className="space-y-6">
@@ -214,9 +234,9 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                     }`}
                   >
                     <div className="flex items-start justify-between gap-4">
-                      <div>
+                      <div className="space-y-1">
                         <h3 className="text-sm font-semibold text-white">{app.job_title}</h3>
-                        <div className="text-xs text-slate-400 mt-0.5 flex flex-wrap items-center gap-1.5">
+                        <div className="text-xs text-slate-400 flex flex-wrap items-center gap-1.5">
                           <span className="text-slate-200 font-medium">{app.company_name}</span>
                           <span aria-hidden="true">·</span>
                           <span>{app.work_mode}</span>
@@ -225,8 +245,34 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                             Match Score: {app.score ?? 90}/100
                           </span>
                         </div>
+                        <div className="flex flex-wrap items-center gap-3 text-xs pt-0.5">
+                          {app.company_career_page && (
+                            <a
+                              href={app.company_career_page}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-indigo-400 hover:underline inline-flex items-center gap-1 font-medium"
+                            >
+                              <span>Careers Page</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                          {app.job_apply_url && (
+                            <a
+                              href={app.job_apply_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-emerald-400 hover:underline inline-flex items-center gap-1"
+                            >
+                              <span>Application Portal</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                        </div>
                         {app.follow_up_at && (
-                          <p className="text-[11px] text-slate-500 font-mono tabular-nums mt-1">
+                          <p className="text-[11px] text-slate-500 font-mono tabular-nums">
                             Follow-up scheduled: {app.follow_up_at.slice(0, 10)}
                           </p>
                         )}
@@ -255,6 +301,30 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                     Current Status: <strong className="text-indigo-400">{selectedApp.status}</strong>
                     {selectedApp.applied_at && ` · Applied: ${selectedApp.applied_at.slice(0, 10)}`}
                   </p>
+                  <div className="flex flex-wrap items-center gap-3 pt-1 text-xs">
+                    {selectedApp.company_career_page && (
+                      <a
+                        href={selectedApp.company_career_page}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-indigo-400 hover:underline inline-flex items-center gap-1 font-medium"
+                      >
+                        <span>Company Careers Page</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                    {selectedApp.job_apply_url && (
+                      <a
+                        href={selectedApp.job_apply_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-emerald-400 hover:underline inline-flex items-center gap-1 font-medium"
+                      >
+                        <span>Direct Job Application</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </div>
                 </div>
 
                 {/* Status Transition Control */}
@@ -353,7 +423,7 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                 <thead>
                   <tr className="border-b border-slate-800 text-[11px] font-semibold text-slate-400">
                     <th className="py-3 px-4">Contact & Role</th>
-                    <th className="py-3 px-4">Company</th>
+                    <th className="py-3 px-4">Company & Careers</th>
                     <th className="py-3 px-4">Business Email & Verification Status</th>
                     <th className="py-3 px-4">Provenance Source</th>
                     <th className="py-3 px-4 text-right">Outreach</th>
@@ -369,7 +439,20 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                           <div className="font-semibold text-white">{ct.name}</div>
                           <div className="text-slate-400">{ct.designation}</div>
                         </td>
-                        <td className="py-3 px-4 text-slate-200">{ct.company_name}</td>
+                        <td className="py-3 px-4">
+                          <div className="text-slate-200 font-medium">{ct.company_name}</div>
+                          {ct.company_career_page && (
+                            <a
+                              href={ct.company_career_page}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[11px] text-indigo-400 hover:underline inline-flex items-center gap-1"
+                            >
+                              <span>Careers Page</span>
+                              <ExternalLink className="w-2.5 h-2.5" />
+                            </a>
+                          )}
+                        </td>
                         <td className="py-3 px-4 font-mono">
                           <span className="text-slate-200">{ct.email || 'Not Published'}</span>
                           <span aria-hidden="true"> · </span>
@@ -473,14 +556,38 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
               {selectedDraft ? (
                 <>
                   <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-800">
-                    <div>
+                    <div className="space-y-1">
                       <h3 className="text-sm font-bold text-white">
                         Recipient: {selectedDraft.contact_name} ({selectedDraft.contact_designation})
                       </h3>
                       <p className="text-xs text-slate-400 font-mono">
-                        Email: {selectedDraft.contact_email || 'UNPUBLISHED'} · Verification:{' '}
-                        {selectedDraft.contact_email_status}
+                        To: <span className="text-slate-200">{selectedDraft.contact_email || 'UNPUBLISHED'}</span> · Verification:{' '}
+                        <span className="text-emerald-400">{selectedDraft.contact_email_status}</span>
                       </p>
+                      <div className="flex flex-wrap items-center gap-3 text-xs pt-0.5">
+                        {selectedDraft.company_career_page && (
+                          <a
+                            href={selectedDraft.company_career_page}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-indigo-400 hover:underline inline-flex items-center gap-1"
+                          >
+                            <span>{selectedDraft.company_name} Careers</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                        {selectedDraft.job_apply_url && (
+                          <a
+                            href={selectedDraft.job_apply_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-emerald-400 hover:underline inline-flex items-center gap-1"
+                          >
+                            <span>Referenced Job Opening</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                      </div>
                     </div>
 
                     <div className="text-right font-mono text-xs">
@@ -532,60 +639,102 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                     ))}
                   </div>
 
-                  {/* Two-Step Safety Action Bar */}
-                  <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800">
-                    <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
-                      <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                      <span>
-                        Safety Policy: Approval and Sending are strictly separate actions.
-                      </span>
+                  {/* Two-Step Safety Action Bar + Real Mail Client & Gmail Actions */}
+                  <div className="space-y-3 pt-2 border-t border-slate-800">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <span>
+                          Safety Policy: Approval and Sending are strictly separate actions.
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        {selectedDraft.status !== 'SENT' && (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={async () => {
+                              setBusy(true);
+                              await onUpdateDraft(selectedDraft.id, editSubject, editBody);
+                              setFeedback('Saved edits to outreach draft.');
+                              setBusy(false);
+                            }}
+                            className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg whitespace-nowrap shrink-0"
+                          >
+                            Save Edits
+                          </button>
+                        )}
+
+                        {selectedDraft.status === 'PENDING_APPROVAL' && (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleApprove(selectedDraft.id)}
+                            className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Step 1: Approve Draft</span>
+                          </button>
+                        )}
+
+                        {selectedDraft.status === 'APPROVED' && (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleSend(selectedDraft.id)}
+                            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                          >
+                            <Send className="w-3.5 h-3.5" />
+                            <span>Step 2: Explicit Send Email</span>
+                          </button>
+                        )}
+
+                        {selectedDraft.status === 'SENT' && (
+                          <span className="text-xs font-mono text-emerald-400">
+                            Sent ({selectedDraft.provider_message_id})
+                          </span>
+                        )}
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      {selectedDraft.status !== 'SENT' && (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={async () => {
-                            setBusy(true);
-                            await onUpdateDraft(selectedDraft.id, editSubject, editBody);
-                            setFeedback('Saved edits to outreach draft.');
-                            setBusy(false);
-                          }}
-                          className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg whitespace-nowrap shrink-0"
-                        >
-                          Save Edits
-                        </button>
-                      )}
+                    {/* Direct Real Email Client Dispatch Bar (Gmail Web Compose & Mailto) */}
+                    <div className="p-3 rounded-lg bg-slate-950/90 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                      <div className="space-y-0.5">
+                        <div className="font-semibold text-slate-200 flex items-center gap-1.5">
+                          <Mail className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>Real Email Delivery & Client Launch</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400">
+                          {selectedDraft.status === 'PENDING_APPROVAL'
+                            ? 'Approve this draft in Step 1 to unlock direct Gmail & Mail App sending or server-side Resend/SendGrid dispatch.'
+                            : 'Send via server API (RESEND_API_KEY / SENDGRID_API_KEY) or launch directly in your Gmail / Mail client:'}
+                        </p>
+                      </div>
 
-                      {selectedDraft.status === 'PENDING_APPROVAL' && (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => handleApprove(selectedDraft.id)}
-                          className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 whitespace-nowrap shrink-0"
-                        >
-                          <Check className="w-3.5 h-3.5" />
-                          <span>Step 1: Approve Draft</span>
-                        </button>
-                      )}
-
-                      {selectedDraft.status === 'APPROVED' && (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => handleSend(selectedDraft.id)}
-                          className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 whitespace-nowrap shrink-0"
-                        >
-                          <Send className="w-3.5 h-3.5" />
-                          <span>Step 2: Explicit Send Email</span>
-                        </button>
-                      )}
-
-                      {selectedDraft.status === 'SENT' && (
-                        <span className="text-xs font-mono text-emerald-400">
-                          Sent ({selectedDraft.provider_message_id})
-                        </span>
+                      {selectedDraft.status !== 'PENDING_APPROVAL' && currentRecipientEmail && (
+                        <div className="flex items-center gap-2 shrink-0">
+                          {liveGmailUrl && (
+                            <a
+                              href={liveGmailUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                            >
+                              <span>Open in Gmail</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                          {liveMailtoUrl && (
+                            <a
+                              href={liveMailtoUrl}
+                              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-medium rounded-lg inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                            >
+                              <Mail className="w-3 h-3" />
+                              <span>Open Mail App</span>
+                            </a>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>
@@ -600,3 +749,4 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
     </div>
   );
 };
+

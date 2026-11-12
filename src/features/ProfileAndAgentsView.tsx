@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Trash2, RefreshCw, Play, Check } from 'lucide-react';
+import { Plus, Trash2, RefreshCw, Play, Check, ExternalLink } from 'lucide-react';
 
 interface ProfileAndAgentsProps {
   mode: 'profile' | 'agents';
@@ -380,14 +380,33 @@ export const ProfileAndAgentsView: React.FC<ProfileAndAgentsProps> = ({
           <div className="divide-y divide-slate-800/80 text-xs">
             {sources.map((src) => (
               <div key={src.id} className="p-4 flex items-center justify-between gap-4">
-                <div>
+                <div className="space-y-1 min-w-0">
                   <div className="font-semibold text-white">
                     {src.company_name} · <span className="font-mono">{src.ats_provider}</span>
                   </div>
-                  <div className="text-[11px] text-slate-400 font-mono truncate max-w-sm mt-0.5">
-                    {src.source_url}
+                  <div className="flex flex-wrap items-center gap-3 text-[11px]">
+                    {src.company_career_page && (
+                      <a
+                        href={src.company_career_page}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-indigo-400 hover:underline inline-flex items-center gap-1 font-medium"
+                      >
+                        <span>Careers Page</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                    )}
+                    <a
+                      href={src.source_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-emerald-400 hover:underline inline-flex items-center gap-1 font-mono"
+                    >
+                      <span>Live ATS Endpoint</span>
+                      <ExternalLink className="w-2.5 h-2.5" />
+                    </a>
                   </div>
-                  <div className="text-[11px] text-slate-500 font-mono tabular-nums mt-0.5">
+                  <div className="text-[11px] text-slate-500 font-mono tabular-nums">
                     Status: <span className="text-emerald-400">{src.status}</span> · Active roles:{' '}
                     {src.active_jobs_count} · Failures: {src.failure_count}
                   </div>
@@ -398,13 +417,13 @@ export const ProfileAndAgentsView: React.FC<ProfileAndAgentsProps> = ({
                   onClick={async () => {
                     setBusy(true);
                     await onCheckSource(src.id);
-                    setFeedback(`Polled ${src.company_name} (${src.ats_provider}) endpoint.`);
+                    setFeedback(`Polled live ${src.company_name} (${src.ats_provider}) endpoint over HTTP.`);
                     setBusy(false);
                   }}
                   className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded font-medium flex items-center gap-1 whitespace-nowrap shrink-0"
                 >
                   <RefreshCw className="w-3 h-3" />
-                  <span>Poll Source</span>
+                  <span>Poll Live</span>
                 </button>
               </div>
             ))}
