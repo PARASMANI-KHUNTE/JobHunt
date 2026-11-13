@@ -1,12 +1,8 @@
 import express from 'express';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { createApiApp } from './apps/api/src/app.ts';
 import { validateEnv } from './packages/config/src/env.ts';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const envValidation = validateEnv();
@@ -38,7 +34,7 @@ async function startServer() {
     console.log('[JobHunt OS] Vite development middleware mounted');
   } else {
     // Production: serve built static assets from dist
-    const distPath = path.resolve(__dirname, 'dist');
+    const distPath = path.resolve(import.meta.dirname, 'dist');
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
       res.sendFile(path.resolve(distPath, 'index.html'));

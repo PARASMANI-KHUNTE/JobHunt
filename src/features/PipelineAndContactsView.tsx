@@ -9,6 +9,7 @@ import {
   Mail,
   Kanban,
   Ban,
+  Loader2,
 } from 'lucide-react';
 import { statusTone } from '../lib/ui.ts';
 
@@ -85,6 +86,13 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
     applications.find((a) => a.id === selectedAppId) || applications[0] || null;
 
   const handleTransition = async (appId: string, nextStatus: string) => {
+    const terminalStatuses = ['REJECTED', 'WITHDRAWN', 'GHOSTED', 'CLOSED'];
+    if (terminalStatuses.includes(nextStatus)) {
+      const confirmed = window.confirm(
+        `Are you sure you want to transition this application to "${nextStatus}"?`
+      );
+      if (!confirmed) return;
+    }
     setBusy(true);
     setFeedback(null);
     setErrorMsg(null);
@@ -132,6 +140,10 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
   };
 
   const handleDiscard = async (draftId: string) => {
+    const confirmed = window.confirm(
+      'Are you sure you want to discard this outreach draft? It will be removed from the active approval queue.'
+    );
+    if (!confirmed) return;
     setBusy(true);
     setFeedback(null);
     setErrorMsg(null);
@@ -837,7 +849,7 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                             type="button"
                             disabled={busy}
                             onClick={() => handleDiscard(selectedDraft.id)}
-                            className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-rose-300 text-xs font-medium rounded-lg inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                            className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 border border-slate-800 text-slate-400 hover:text-rose-300 text-xs font-medium rounded-lg inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
                           >
                             <Ban className="w-3.5 h-3.5" />
                             <span>Discard</span>
@@ -849,10 +861,14 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                             type="button"
                             disabled={busy}
                             onClick={() => handleApprove(selectedDraft.id)}
-                            className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                            className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 whitespace-nowrap shrink-0"
                           >
-                            <Check className="w-3.5 h-3.5" />
-                            <span>Step 1: Approve Draft</span>
+                            {busy ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Check className="w-3.5 h-3.5" />
+                            )}
+                            <span>{busy ? 'Approving...' : 'Step 1: Approve Draft'}</span>
                           </button>
                         )}
 
@@ -861,10 +877,14 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                             type="button"
                             disabled={busy}
                             onClick={() => handleSend(selectedDraft.id)}
-                            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-medium rounded-lg flex items-center gap-1.5 whitespace-nowrap shrink-0"
                           >
-                            <Send className="w-3.5 h-3.5" />
-                            <span>Step 2: Explicit Send Email</span>
+                            {busy ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Send className="w-3.5 h-3.5" />
+                            )}
+                            <span>{busy ? 'Sending...' : 'Step 2: Explicit Send Email'}</span>
                           </button>
                         )}
 

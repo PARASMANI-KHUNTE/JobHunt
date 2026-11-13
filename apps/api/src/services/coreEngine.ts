@@ -99,6 +99,28 @@ export function detectAtsProviderFromUrl(url: string | null | undefined): AtsPro
   return 'UNKNOWN';
 }
 
+/**
+ * Resolves the canonical career page URL for a company, checking metadata first
+ * and falling back to {website}/careers when website is present.
+ */
+export function getCareerPageUrl(company: {
+  website?: string | null;
+  metadata?: { career_page?: string | null; [key: string]: any } | null;
+  career_page?: string | null;
+} | null | undefined): string | null {
+  if (!company) return null;
+  if (company.career_page && typeof company.career_page === 'string') {
+    return company.career_page;
+  }
+  if (company.metadata?.career_page && typeof company.metadata.career_page === 'string') {
+    return company.metadata.career_page;
+  }
+  if (company.website) {
+    return `${company.website.replace(/\/$/, '')}/careers`;
+  }
+  return null;
+}
+
 // ============================================================================
 // 2. Security: SSRF Protection & Untrusted Text Sanitization (Phase 10)
 // ============================================================================
