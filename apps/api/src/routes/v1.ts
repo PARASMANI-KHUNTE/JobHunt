@@ -70,14 +70,37 @@ v1Router.get('/profile', (_req: Request, res: Response) => {
 
 v1Router.put('/profile', (req: Request, res: Response) => {
   try {
-    const { full_name, headline, summary, experience_years, resume_url, resume_text, preferences } =
-      req.body || {};
+    const {
+      full_name,
+      headline,
+      summary,
+      experience_years,
+      resume_url,
+      resume_text,
+      preferences,
+      work_experience,
+      education,
+    } = req.body || {};
 
     if (full_name !== undefined && (!full_name || String(full_name).trim().length === 0)) {
       return sendError(res, 400, 'VALIDATION_ERROR', 'Candidate full_name cannot be empty');
     }
 
-    const updated = dbStore.updateProfile(dbStore.defaultUserId, {
+    if (
+      experience_years !== undefined &&
+      (Number.isNaN(Number(experience_years)) || Number(experience_years) < 0)
+    ) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'experience_years must be a non-negative number');
+    }
+
+    if (work_experience !== undefined && !Array.isArray(work_experience)) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'work_experience must be an array');
+    }
+    if (education !== undefined && !Array.isArray(education)) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'education must be an array');
+    }
+
+    const updates: Parameters<typeof dbStore.updateProfile>[1] = {
       ...(full_name !== undefined ? { full_name: String(full_name).trim() } : {}),
       ...(headline !== undefined ? { headline: String(headline).trim() } : {}),
       ...(summary !== undefined ? { summary: String(summary).trim() } : {}),
@@ -85,7 +108,17 @@ v1Router.put('/profile', (req: Request, res: Response) => {
       ...(resume_url !== undefined ? { resume_url } : {}),
       ...(resume_text !== undefined ? { resume_text: String(resume_text) } : {}),
       ...(preferences !== undefined ? { preferences } : {}),
-    });
+      ...(work_experience !== undefined ? { work_experience } : {}),
+      ...(education !== undefined ? { education } : {}),
+    };
+
+    // No recognized fields -> do not bump profile_version or re-evaluate.
+    if (Object.keys(updates).length === 0) {
+      const current = dbStore.getProfile(dbStore.defaultUserId);
+      return res.json({ data: { ...current, skills: dbStore.getSkills(current.id) } });
+    }
+
+    const updated = dbStore.updateProfile(dbStore.defaultUserId, updates);
 
     // Re-evaluate active jobs when profile version increments (Section 4 Validation rule)
     for (const job of dbStore.jobs.values()) {
@@ -672,9 +705,16 @@ v1Router.get('/contacts', (_req: Request, res: Response) => {
 });
 
 v1Router.post('/contacts/:id/research', async (req: Request, res: Response) => {
-  const run = await dbStore.triggerAgentRun('contact-finder', {
-    company_id: req.body?.company_id || req.params.id,
-  });
+  const contact = dbStore.contacts.get(req.params.id);
+  if (!contact && !req.body?.company_id) {
+    return sendError(res, 404, 'NOT_FOUND', 'Contact not found and no company_id supplied');
+  }
+  // Research the contact's own company, not the contact id masquerading as one.
+  const companyId = req.body?.company_id || contact?.company_id;
+  if (!companyId) {
+    return sendError(res, 400, 'VALIDATION_ERROR', 'Unable to resolve a company to research');
+  }
+  const run = await dbStore.triggerAgentRun('contact-finder', { company_id: companyId });
   res.status(202).json({ data: run });
 });
 
@@ -884,10 +924,19 @@ v1Router.get('/dashboard/overview', (_req: Request, res: Response) => {
   const sources = Array.from(dbStore.jobSources.values());
   const healthySources = sources.filter((s) => s.status === 'HEALTHY');
   const jobs = Array.from(dbStore.jobs.values());
-  const evaluations = Array.from(dbStore.evaluations.values());
-  const qualifiedJobs = evaluations.filter((e) => e.decision === 'QUALIFIED');
-  const reviewJobs = evaluations.filter((e) => e.decision === 'REVIEW');
-  const rejectedJobs = evaluations.filter((e) => e.decision === 'REJECTED');
+  // Count decisions per unique job using each job's *latest* evaluation, so a
+  // job re-evaluated after a profile change is not double-counted and its old
+  // decision is not counted alongside the new one.
+  let qualifiedJobsCount = 0;
+  let reviewJobsCount = 0;
+  let rejectedJobsCount = 0;
+  for (const job of jobs) {
+    const latest = dbStore.getLatestEvaluationForJob(job.id);
+    if (!latest) continue;
+    if (latest.decision === 'QUALIFIED') qualifiedJobsCount++;
+    else if (latest.decision === 'REVIEW') reviewJobsCount++;
+    else rejectedJobsCount++;
+  }
   const applications = Array.from(dbStore.applications.values());
   const contacts = Array.from(dbStore.contacts.values());
   const drafts = Array.from(dbStore.outreachDrafts.values());
@@ -904,11 +953,13 @@ v1Router.get('/dashboard/overview', (_req: Request, res: Response) => {
         source_health_rate:
           sources.length > 0 ? Math.round((healthySources.length / sources.length) * 100) : 100,
         unique_jobs_count: jobs.length,
-        qualified_jobs_count: qualifiedJobs.length,
-        review_jobs_count: reviewJobs.length,
-        rejected_jobs_count: rejectedJobs.length,
+        qualified_jobs_count: qualifiedJobsCount,
+        review_jobs_count: reviewJobsCount,
+        rejected_jobs_count: rejectedJobsCount,
         applications_tracked_count: applications.length,
-        verified_contacts_count: contacts.filter((c) => c.email_status !== 'NOT_FOUND').length,
+        // Only verified addresses count as "verified contacts"; inferred guesses
+        // are not verified.
+        verified_contacts_count: contacts.filter((c) => c.email_status === 'VERIFIED').length,
         total_contacts_count: contacts.length,
         pending_drafts_count: drafts.filter((d) => d.status === 'PENDING_APPROVAL').length,
         sent_drafts_count: drafts.filter((d) => d.status === 'SENT').length,

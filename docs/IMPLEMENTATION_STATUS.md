@@ -111,3 +111,41 @@ One-click profile bootstrap: the candidate uploads a resume, reviews what was ex
 - `npm test` — 35/35 pass (includes real-PDF extraction through the API and idempotent re-apply)
 - `npm run build` — pass (chunk-size advisory only)
 - Live smoke test against the running dev server (port 3000): `parse` extracted name/headline/contact/11 skills/2 work entries/education/summary correctly; `apply` added 5 skills, bumped profile to v2, stored work + education; re-apply was idempotent (0 added, 5 skipped); `GET /profile` reflected v3 with all imported data.
+
+---
+
+## 6. Code Review & Correctness Fix Pass (2026-11-13)
+
+Full read-through of the deterministic core, store, routes, services, and frontend, fixing genuine logic gaps while keeping the "Deterministic Core" and "No Fabricated Data" principles intact. All fixes are behavior-preserving where the original intent was correct.
+
+### 6.1 Evaluation & Matching (`coreEngine.ts`)
+- **Skill matching false positives removed:** `requiredSkillsInJob` previously used a raw `String.includes()` check, so short tokens matched inside unrelated words (`Go` in "algorithms", `AWS` in "laws", `SQL` in "PostgreSQL"), inflating required-skill sets and deflating the technical-skills score. Now matches only normalized, word-bounded tokens (with a regex-escaped catalog term).
+- **Dead work-mode filter removed:** `workModeEligible` had an unreachable branch (`job.work_mode !== 'CLOSED'`) — `CLOSED` is a job *status*, not a work mode. Simplified to `prefs.remote_only ? job.work_mode === 'REMOTE' : true`.
+
+### 6.2 Job Ingestion & Source Health (`store.ts`, `atsLiveAdapter.ts`)
+- **Same-source update path completed:** re-polling an existing job now persists `country_code`, `experience_min/max`, `posted_at`, `apply_url`, `source_url`, `salary_currency`, and `raw_data`, and its `changed` detection reflects all of them (previously these were dropped and updates were under-reported).
+- **No downgrade to `UNKNOWN`:** `work_mode`/`employment_type` are only overwritten when the incoming value is informative.
+- **Honest source health:** the job hunter no longer unconditionally resets `status='HEALTHY'` / `failure_count=0` before polling. A live fetch failure now calls `recordSourceFetchFailure` (streak preserved, `DEGRADED` at ≥3); only a successful fetch clears the streak via the new `recordSourceFetchSuccess`.
+- **Authoritative closed-job detection:** adapters now return `allExternalIds` (the full board id set); the hunter closes only ACTIVE jobs whose `external_id` is absent from a *successful* full fetch, and reports a real `closed_jobs_count` (was hardcoded 0). Partial pages are skipped to avoid false closes.
+- **Funding recency fixed:** `recomputeCompanyPriority` and `createOutreachDraft` now select the latest funding round by announcement/publication date (falling back to creation time) instead of insertion order.
+- **Cross-company draft guard:** `createOutreachDraft` rejects when the contact's company does not match the job's company.
+
+### 6.3 Provenance Honesty (no fabricated data)
+- **Contact Finder:** a guessed generic `careers@domain` inbox is now `email_status: 'INFERRED'` (was `PUBLICLY_LISTED`) with an honest provenance note, and the fabricated `linkedin.com/company/<slug>` URL is no longer produced.
+- **Company Investigator:** the ATS is detected from the company's career/website URL via `detectAtsProviderFromUrl`; a job source is registered **only** when a real ATS is known, using the correct board API URL and slug parsed from that URL. Unknown-ATS companies register no source (previously every company was assumed `GREENHOUSE` with an invented board URL). `metadata.verified_identity` is still set for verified companies.
+- **Mailer:** the `MAIL_CLIENT_READY` fallback (no provider configured) now returns `delivered: false` with an honest note, instead of claiming delivery when nothing was transmitted.
+
+### 6.4 API Routes (`routes/v1.ts`)
+- **Contact research:** `POST /contacts/:id/research` now resolves the contact's own `company_id` (it previously passed the *contact* id as the company id).
+- **Dashboard metrics:** `qualified/review/rejected_jobs_count` are computed per unique job from each job's **latest** evaluation (no double-counting across re-evaluations); `verified_contacts_count` counts only `VERIFIED` addresses (inferred guesses no longer inflate it). `getLatestEvaluationForJob` gained an `evaluated_at` tiebreak.
+- **Profile update:** `PUT /profile` validates `experience_years` (rejects NaN/negative), accepts `work_experience`/`education` arrays, and no longer bumps `profile_version` or re-evaluates on an empty body.
+
+### 6.5 Frontend
+- **Explicit unverified-send affordance:** auto-discovered contacts are now `INFERRED`, so the outreach inspector shows a "Send anyway (unverified)" action (calls the existing `force_unverified` API path) for INFERRED/NOT_FOUND recipients, and the verification label is color-coded (VERIFIED emerald / PUBLICLY_LISTED sky / inferred amber) instead of always green.
+
+### 6.6 Verification (2026-11-13)
+- `npm run lint` — pass (0 errors)
+- `npm test` — 35/35 pass
+- `npm run test:python` — 10/10 pass
+- `npm run build` — pass (chunk-size advisory only)
+- Live smoke test (fresh server): empty `PUT /profile` left `profile_version` unchanged; negative `experience_years` → 400; full pipeline created 1 company, registered **0** fabricated sources for an unknown-ATS company, and produced an `INFERRED` contact with `linkedin: null`; dashboard reported `verified_contacts_count: 0` for that inferred-only contact; `POST /contacts/:id/research` → 202. Positive path: a `boards.greenhouse.io/<slug>` career page detected `GREENHOUSE` and registered `https://boards-api.greenhouse.io/v1/boards/<slug>/jobs` with `verified_identity: true`.

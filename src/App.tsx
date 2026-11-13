@@ -366,14 +366,14 @@ export default function App() {
     await loadAllCrmData();
   };
 
-  const handleSendDraft = async (draftId: string) => {
+  const handleSendDraft = async (draftId: string, forceUnverified = false) => {
     const res = await fetch(`/api/v1/outreach/drafts/${draftId}/send`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Idempotency-Key': `send-${draftId}`,
       },
-      body: JSON.stringify({}),
+      body: JSON.stringify(forceUnverified ? { force_unverified: true } : {}),
     });
     if (!res.ok) throw new Error(await extractApiError(res, 'Send blocked by safety policy'));
     const result = await res.json();

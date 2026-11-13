@@ -94,7 +94,7 @@ export async function fetchLiveJobsFromAts(
   atsProvider: string,
   sourceUrl: string,
   maxJobs = 8
-): Promise<{ jobs: LiveFetchedJob[]; live: boolean; error?: string }> {
+): Promise<{ jobs: LiveFetchedJob[]; live: boolean; error?: string; allExternalIds?: string[] }> {
   const urlCheck = isSafeExternalUrl(sourceUrl);
   if (!urlCheck.safe) {
     return { jobs: [], live: false, error: urlCheck.reason };
@@ -152,7 +152,13 @@ export async function fetchLiveJobsFromAts(
         };
       });
 
-      return { jobs: normalized, live: true };
+      return {
+        jobs: normalized,
+        live: true,
+        // Every external id currently on the board (not just the selected page),
+        // so callers can safely detect postings that have been taken down.
+        allExternalIds: rawJobs.map((j) => `gh-${j.id}`),
+      };
     }
 
     if (atsProvider === 'ASHBY' || sourceUrl.includes('ashbyhq.com')) {
@@ -199,7 +205,11 @@ export async function fetchLiveJobsFromAts(
         };
       });
 
-      return { jobs: normalized, live: true };
+      return {
+        jobs: normalized,
+        live: true,
+        allExternalIds: rawJobs.map((j) => `ashby-${j.id}`),
+      };
     }
 
     if (atsProvider === 'LEVER' || sourceUrl.includes('lever.co')) {
@@ -240,7 +250,11 @@ export async function fetchLiveJobsFromAts(
         };
       });
 
-      return { jobs: normalized, live: true };
+      return {
+        jobs: normalized,
+        live: true,
+        allExternalIds: rawJobs.map((j) => `lever-${j.id}`),
+      };
     }
 
     return { jobs: [], live: false, error: 'Unsupported ATS provider for live polling' };

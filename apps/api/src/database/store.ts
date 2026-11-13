@@ -231,8 +231,6 @@ export class JobHuntStore {
     skills_added: number;
     skills_skipped: number;
   } {
-    const existing = this.getProfile(this.defaultUserId);
-
     const updated = this.updateProfile(this.defaultUserId, {
       ...(payload.full_name !== undefined && String(payload.full_name).trim()
         ? { full_name: String(payload.full_name).trim() }
@@ -246,7 +244,6 @@ export class JobHuntStore {
       ...(payload.work_experience !== undefined ? { work_experience: payload.work_experience } : {}),
       ...(payload.education !== undefined ? { education: payload.education } : {}),
     });
-    void existing;
 
     let skillsAdded = 0;
     let skillsSkipped = 0;
@@ -448,12 +445,27 @@ export class JobHuntStore {
     return { round: record, created: true };
   }
 
+  /**
+   * Deterministic "most recent" key for a funding round. Prefers the
+   * announcement/publication date, falling back to record creation time.
+   */
+  private fundingRoundTime(round: FundingRoundRecord): number {
+    const dateStr = round.announcement_date || round.publication_date;
+    const parsed = dateStr ? new Date(dateStr).getTime() : NaN;
+    if (!Number.isNaN(parsed)) return parsed;
+    const created = new Date(round.created_at).getTime();
+    return Number.isNaN(created) ? 0 : created;
+  }
+
   public recomputeCompanyPriority(companyId: string): CompanyRecord | null {
     const company = this.companies.get(companyId);
     if (!company) return null;
 
     const rounds = Array.from(this.fundingRounds.values()).filter((r) => r.company_id === companyId);
-    const latestRound = rounds[0];
+    // Most recent round by date, NOT insertion order.
+    const latestRound = [...rounds].sort(
+      (a, b) => this.fundingRoundTime(b) - this.fundingRoundTime(a)
+    )[0];
     const stage: FundingStage = latestRound ? latestRound.round_type : 'UNKNOWN';
 
     let daysSince: number | null = null;
@@ -560,8 +572,26 @@ export class JobHuntStore {
         existing.source_id === input.source_id && existing.external_id === input.external_id;
 
       if (sameSourceExternalId) {
+        // Never let a less-informative poll downgrade a known value with UNKNOWN.
+        const nextWorkMode =
+          input.work_mode && input.work_mode !== 'UNKNOWN'
+            ? input.work_mode
+            : existing.work_mode;
+        const nextEmploymentType =
+          input.employment_type && input.employment_type !== 'UNKNOWN'
+            ? input.employment_type
+            : existing.employment_type;
+
         const changed =
-          existing.description_hash !== descHash || existing.title !== input.title.trim();
+          existing.description_hash !== descHash ||
+          existing.title !== input.title.trim() ||
+          (input.location !== undefined && input.location !== existing.location) ||
+          nextWorkMode !== existing.work_mode ||
+          nextEmploymentType !== existing.employment_type ||
+          (input.salary_min !== undefined && input.salary_min !== existing.salary_min) ||
+          (input.salary_max !== undefined && input.salary_max !== existing.salary_max) ||
+          (input.posted_at !== undefined && input.posted_at !== existing.posted_at) ||
+          (input.apply_url !== undefined && input.apply_url !== existing.apply_url);
 
         const updated: JobRecord = {
           ...existing,
@@ -570,9 +600,18 @@ export class JobHuntStore {
           description: input.description,
           description_hash: descHash,
           location: input.location !== undefined ? input.location : existing.location,
-          work_mode: input.work_mode || existing.work_mode,
+          country_code: input.country_code !== undefined ? input.country_code : existing.country_code,
+          work_mode: nextWorkMode,
+          employment_type: nextEmploymentType,
           salary_min: input.salary_min !== undefined ? input.salary_min : existing.salary_min,
           salary_max: input.salary_max !== undefined ? input.salary_max : existing.salary_max,
+          salary_currency: input.salary_currency !== undefined ? input.salary_currency : existing.salary_currency,
+          experience_min: input.experience_min !== undefined ? input.experience_min : existing.experience_min,
+          experience_max: input.experience_max !== undefined ? input.experience_max : existing.experience_max,
+          posted_at: input.posted_at !== undefined ? input.posted_at : existing.posted_at,
+          apply_url: input.apply_url !== undefined ? input.apply_url : existing.apply_url,
+          source_url: input.source_url !== undefined ? input.source_url : existing.source_url,
+          raw_data: input.raw_data ? { ...(existing.raw_data || {}), ...input.raw_data } : existing.raw_data,
           last_seen_at: now,
           last_verified_open_at: now,
           updated_at: changed ? now : existing.updated_at,
@@ -671,6 +710,22 @@ export class JobHuntStore {
       failure_count: failures,
       last_error: errorMessage,
       status: failures >= 3 ? 'DEGRADED' : 'HEALTHY',
+      last_checked_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    this.jobSources.set(sourceId, updated);
+    return updated;
+  }
+
+  public recordSourceFetchSuccess(sourceId: string): JobSourceRecord {
+    const src = this.jobSources.get(sourceId);
+    if (!src) throw new Error('NOT_FOUND: Job source not found');
+
+    const updated: JobSourceRecord = {
+      ...src,
+      failure_count: 0,
+      last_error: null,
+      status: 'HEALTHY',
       last_checked_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -811,7 +866,11 @@ export class JobHuntStore {
   ): JobEvaluationRecord | null {
     const matching = Array.from(this.evaluations.values())
       .filter((e) => e.job_id === jobId && e.profile_id === profileId)
-      .sort((a, b) => b.profile_version - a.profile_version);
+      .sort(
+        (a, b) =>
+          b.profile_version - a.profile_version ||
+          new Date(b.evaluated_at).getTime() - new Date(a.evaluated_at).getTime()
+      );
     return matching[0] || null;
   }
 
@@ -871,10 +930,17 @@ export class JobHuntStore {
     if (!contact || !job || !profile) {
       throw new Error('NOT_FOUND: Contact, Job, or Profile not found');
     }
+    if (contact.company_id !== job.company_id) {
+      throw new Error(
+        'VALIDATION_ERROR: Contact does not belong to the job company; refusing to draft mismatched outreach'
+      );
+    }
 
     const company = this.companies.get(job.company_id);
     const rounds = Array.from(this.fundingRounds.values()).filter((r) => r.company_id === job.company_id);
-    const latestRound = rounds[0];
+    const latestRound = [...rounds].sort(
+      (a, b) => this.fundingRoundTime(b) - this.fundingRoundTime(a)
+    )[0];
     const skills = this.getSkills(profileId).slice(0, 4).map((s) => s.skill_name);
 
     const fundingMention = latestRound
@@ -1306,49 +1372,81 @@ export class JobHuntStore {
     let investigatedCount = 0;
     let sourcesRegistered = 0;
 
-    for (const comp of companiesToInvestigate) {
-      const slug = comp.normalized_name || 'company';
-      const ats: AtsProvider =
-        comp.metadata?.ats_provider && comp.metadata.ats_provider !== 'UNKNOWN'
-          ? comp.metadata.ats_provider
-          : 'GREENHOUSE';
+    // Pull the board slug out of an ATS URL path when we have one; otherwise
+    // fall back to the normalized company name.
+    const extractAtsSlug = (url: string | null | undefined): string | null => {
+      if (!url) return null;
+      try {
+        const parsed = new URL(url.startsWith('http') ? url : `https://${url}`);
+        const ignored = new Set([
+          'v1', 'v0', 'boards', 'postings', 'jobs', 'job-board', 'posting-api', 'embed', 'departments',
+        ]);
+        const parts = parsed.pathname.split('/').filter(Boolean).filter((p) => !ignored.has(p));
+        return parts[parts.length - 1] || null;
+      } catch {
+        return null;
+      }
+    };
 
+    for (const comp of companiesToInvestigate) {
       const careerUrl =
         comp.metadata?.career_page ||
-        (comp.website ? `${comp.website.replace(/\/$/, '')}/careers` : `https://boards.greenhouse.io/${slug}`);
+        (comp.website ? `${comp.website.replace(/\/$/, '')}/careers` : null);
+
+      // Detect the ATS from any known URL we hold, rather than assuming
+      // Greenhouse. An unknown ATS means we register NO source (never invent a
+      // board URL that does not exist).
+      const detectedAts: AtsProvider =
+        detectAtsProviderFromUrl(careerUrl) !== 'UNKNOWN'
+          ? detectAtsProviderFromUrl(careerUrl)
+          : detectAtsProviderFromUrl(comp.website) !== 'UNKNOWN'
+          ? detectAtsProviderFromUrl(comp.website)
+          : comp.metadata?.ats_provider && comp.metadata.ats_provider !== 'UNKNOWN'
+          ? comp.metadata.ats_provider
+          : 'UNKNOWN';
+
+      const boardSlug = extractAtsSlug(comp.metadata?.career_page) || comp.normalized_name || 'company';
 
       comp.investigation_status = 'COMPLETED';
       comp.last_researched_at = new Date().toISOString();
       comp.metadata = {
         ...comp.metadata,
-        career_page: careerUrl,
-        ats_provider: ats,
+        ...(careerUrl ? { career_page: careerUrl } : {}),
+        ats_provider: detectedAts,
         verified_identity: true,
       };
       this.companies.set(comp.id, comp);
 
       const hasSource = Array.from(this.jobSources.values()).some((s) => s.company_id === comp.id);
-      if (!hasSource) {
-        const srcId = crypto.randomUUID();
-        this.jobSources.set(srcId, {
-          id: srcId,
-          company_id: comp.id,
-          source_type: ats,
-          source_url:
-            ats === 'GREENHOUSE'
-              ? `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs`
-              : `https://api.ashbyhq.com/posting-api/job-board/${slug}`,
-          ats_provider: ats,
-          poll_interval_seconds: 600,
-          last_checked_at: new Date().toISOString(),
-          next_check_at: new Date(Date.now() + 600_000).toISOString(),
-          status: 'HEALTHY',
-          failure_count: 0,
-          last_error: null,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        });
-        sourcesRegistered++;
+      if (!hasSource && detectedAts !== 'UNKNOWN') {
+        const apiUrl =
+          detectedAts === 'GREENHOUSE'
+            ? `https://boards-api.greenhouse.io/v1/boards/${boardSlug}/jobs`
+            : detectedAts === 'ASHBY'
+            ? `https://api.ashbyhq.com/posting-api/job-board/${boardSlug}`
+            : detectedAts === 'LEVER'
+            ? `https://api.lever.co/v0/postings/${boardSlug}`
+            : null;
+
+        if (apiUrl) {
+          const srcId = crypto.randomUUID();
+          this.jobSources.set(srcId, {
+            id: srcId,
+            company_id: comp.id,
+            source_type: detectedAts,
+            source_url: apiUrl,
+            ats_provider: detectedAts,
+            poll_interval_seconds: 600,
+            last_checked_at: new Date().toISOString(),
+            next_check_at: new Date(Date.now() + 600_000).toISOString(),
+            status: 'HEALTHY',
+            failure_count: 0,
+            last_error: null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+          sourcesRegistered++;
+        }
       }
 
       const hasSignal = Array.from(this.companySignals.values()).some(
@@ -1360,9 +1458,9 @@ export class JobHuntStore {
           id: sigId,
           company_id: comp.id,
           signal_type: 'ACTIVE_CAREER_PAGE',
-          signal_value: { ats, career_url: careerUrl },
-          confidence: 0.95,
-          source_url: careerUrl,
+          signal_value: { ats: detectedAts, career_url: careerUrl },
+          confidence: detectedAts !== 'UNKNOWN' ? 0.95 : 0.6,
+          source_url: careerUrl || comp.website || 'unknown',
           observed_at: new Date().toISOString(),
           created_at: new Date().toISOString(),
         });
@@ -1389,33 +1487,65 @@ export class JobHuntStore {
     let newJobs = 0;
     let updatedJobs = 0;
     let liveFetchedCount = 0;
+    let closedJobs = 0;
 
     for (const src of sources) {
       const comp = this.companies.get(src.company_id);
       if (!comp) continue;
 
+      // Do not pre-emptively reset health: a failed poll must keep the
+      // accumulated failure streak so degraded sources stay visible.
       src.last_checked_at = new Date().toISOString();
-      src.status = 'HEALTHY';
-      src.failure_count = 0;
       this.jobSources.set(src.id, src);
 
       // Live polling only (no mock/fallback job injection)
-      if (useLiveNetwork) {
-        const liveResult = await fetchLiveJobsFromAts(src.ats_provider, src.source_url, 4);
-        if (liveResult.live && liveResult.jobs.length > 0) {
-          for (const lj of liveResult.jobs) {
-            const { job, outcome } = this.upsertJobFromSource({
-              company_id: comp.id,
-              source_id: src.id,
-              ...lj,
-            });
-            this.evaluateAndPersistJob(job.id, this.defaultProfileId);
-            if (outcome === 'NEW') {
-              newJobs++;
-              liveFetchedCount++;
-            } else if (outcome === 'UPDATED') {
-              updatedJobs++;
-            }
+      if (!useLiveNetwork) continue;
+
+      const liveResult = await fetchLiveJobsFromAts(src.ats_provider, src.source_url, 4);
+
+      if (!liveResult.live) {
+        // Honest failure accounting: preserve streak, mark DEGRADED at >= 3.
+        this.recordSourceFetchFailure(
+          src.id,
+          liveResult.error || 'Live ATS fetch failed'
+        );
+        continue;
+      }
+
+      // Successful full-board fetch clears the failure streak.
+      this.recordSourceFetchSuccess(src.id);
+
+      for (const lj of liveResult.jobs) {
+        const { job, outcome } = this.upsertJobFromSource({
+          company_id: comp.id,
+          source_id: src.id,
+          ...lj,
+        });
+        this.evaluateAndPersistJob(job.id, this.defaultProfileId);
+        if (outcome === 'NEW') {
+          newJobs++;
+          liveFetchedCount++;
+        } else if (outcome === 'UPDATED') {
+          updatedJobs++;
+        }
+      }
+
+      // Authoritative closed-job detection: only close ACTIVE jobs from this
+      // source that are absent from the *complete* board id set. If the adapter
+      // could not report the full set (partial page), skip to avoid false closes.
+      if (liveResult.allExternalIds && liveResult.allExternalIds.length > 0) {
+        const liveIds = new Set(liveResult.allExternalIds);
+        for (const job of this.jobs.values()) {
+          if (
+            job.source_id === src.id &&
+            job.status === 'ACTIVE' &&
+            job.external_id &&
+            !liveIds.has(job.external_id)
+          ) {
+            job.status = 'CLOSED';
+            job.updated_at = new Date().toISOString();
+            this.jobs.set(job.id, job);
+            closedJobs++;
           }
         }
       }
@@ -1426,7 +1556,7 @@ export class JobHuntStore {
       new_jobs_count: newJobs,
       updated_jobs_count: updatedJobs,
       live_network_jobs_fetched: liveFetchedCount,
-      closed_jobs_count: 0,
+      closed_jobs_count: closedJobs,
     };
   }
 
@@ -1492,20 +1622,23 @@ export class JobHuntStore {
 
       const domain = comp.domain || 'company.com';
       const careerUrl = comp.metadata?.career_page || `https://${domain}/careers`;
+      // Deterministic guess, not a verified fact: a generic careers@ inbox is
+      // INFERRED (never PUBLICLY_LISTED) so the send gate requires an explicit
+      // human override. We also do not fabricate a LinkedIn profile URL.
       const newContact: ContactRecord = {
         id: crypto.randomUUID(),
         company_id: comp.id,
         name: `${comp.name} Technical Recruiting`,
         designation: 'Technical Talent Acquisition',
         email: `careers@${domain}`,
-        email_status: 'PUBLICLY_LISTED',
+        email_status: 'INFERRED',
         email_source_url: careerUrl,
-        linkedin_url: `https://www.linkedin.com/company/${comp.normalized_name}`,
+        linkedin_url: null,
         other_profile_url: null,
         metadata: {
           priority_rank: 1,
           role_category: 'Technical Recruiter',
-          provenance_note: `Publicly listed talent acquisition contact on ${careerUrl}`,
+          provenance_note: `Guessed generic careers inbox from company domain ${domain}; not verified on ${careerUrl}`,
         },
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),

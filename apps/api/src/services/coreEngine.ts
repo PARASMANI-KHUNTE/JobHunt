@@ -273,13 +273,15 @@ export function evaluateJobAgainstProfile(
     'SQL',
   ];
 
+  // Match on normalized, word-bounded tokens only. A raw `includes()` check
+  // produced substring false positives ("Go" inside "algorithms", "AWS"
+  // inside "laws", "SQL" inside "PostgreSQL"), inflating required-skill sets.
+  const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const titleAndDescNorm = fullTextLower.replace(/\.js\b/g, 'js');
   const requiredSkillsInJob = knownSkillCatalog.filter((sk) => {
-    const norm = normalizeSkill(sk);
-    const titleAndDescNorm = fullTextLower.replace(/\.js\b/g, 'js');
-    return (
-      fullTextLower.includes(sk.toLowerCase()) ||
-      new RegExp(`\\b${norm}\\b`, 'i').test(titleAndDescNorm)
-    );
+    const norm = escapeRegExp(normalizeSkill(sk));
+    if (!norm) return false;
+    return new RegExp(`\\b${norm}\\b`, 'i').test(titleAndDescNorm);
   });
 
   const candidateSkillNormSet = new Set(candidateSkills.map((s) => s.normalized_skill));
@@ -306,9 +308,9 @@ export function evaluateJobAgainstProfile(
   // "Unknown remote policy is not equivalent to remote." So if remote_only is true, only REMOTE (or HYBRID in home geography if allowed, wait: if remote_only is true, ONSITE is ineligible, and UNKNOWN is not given full remote score or if strict remote_only, let's check!)
   // Let's check Section 4 & Phase 5 test rule:
   // "Unknown work mode is not treated as remote."
-  const workModeEligible = prefs.remote_only
-    ? job.work_mode === 'REMOTE'
-    : job.work_mode !== 'CLOSED' as any;
+  // When the candidate is not remote-only, any work mode is acceptable.
+  // (CLOSED is a job *status*, not a work mode, so it is not filtered here.)
+  const workModeEligible = prefs.remote_only ? job.work_mode === 'REMOTE' : true;
 
   // 2. Experience compatibility:
   // Candidate has profile.experience_years and prefs.maximum_experience.

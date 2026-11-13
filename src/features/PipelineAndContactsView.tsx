@@ -26,7 +26,7 @@ interface PipelineAndContactsProps {
   onUpdateDraft: (draftId: string, subject: string, body: string) => Promise<void>;
   onDiscardDraft: (draftId: string) => Promise<void>;
   onApproveDraft: (draftId: string) => Promise<void>;
-  onSendDraft: (draftId: string) => Promise<any>;
+  onSendDraft: (draftId: string, forceUnverified?: boolean) => Promise<any>;
 }
 
 const APPLICATION_STATUSES = [
@@ -159,12 +159,12 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
     }
   };
 
-  const handleSend = async (draftId: string) => {
+  const handleSend = async (draftId: string, forceUnverified = false) => {
     setBusy(true);
     setFeedback(null);
     setErrorMsg(null);
     try {
-      const resData = await onSendDraft(draftId);
+      const resData = await onSendDraft(draftId, forceUnverified);
       setFeedback(
         resData?.delivery_note ||
           'Outreach email dispatched with idempotency key and provider message ID.'
@@ -670,7 +670,17 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                       </h3>
                       <p className="text-xs text-slate-400 font-mono">
                         To: <span className="text-slate-200">{selectedDraft.contact_email || 'UNPUBLISHED'}</span> · Verification:{' '}
-                        <span className="text-emerald-400">{selectedDraft.contact_email_status}</span>
+                        <span
+                          className={
+                            selectedDraft.contact_email_status === 'VERIFIED'
+                              ? 'text-emerald-400'
+                              : selectedDraft.contact_email_status === 'PUBLICLY_LISTED'
+                              ? 'text-sky-400'
+                              : 'text-amber-400'
+                          }
+                        >
+                          {selectedDraft.contact_email_status}
+                        </span>
                       </p>
                       <div className="flex flex-wrap items-center gap-3 text-xs pt-0.5">
                         {selectedDraft.company_career_page && (
@@ -857,6 +867,21 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                             <span>Step 2: Explicit Send Email</span>
                           </button>
                         )}
+
+                        {selectedDraft.status === 'APPROVED' &&
+                          (selectedDraft.contact_email_status === 'INFERRED' ||
+                            selectedDraft.contact_email_status === 'NOT_FOUND') && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleSend(selectedDraft.id, true)}
+                              title="Bypass the unverified-recipient safety gate and send anyway"
+                              className="px-3.5 py-1.5 bg-slate-800 hover:bg-rose-900/60 border border-rose-800 text-rose-200 text-xs font-medium rounded-lg flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                            >
+                              <AlertTriangle className="w-3.5 h-3.5" />
+                              <span>Send anyway (unverified)</span>
+                            </button>
+                          )}
 
                         {selectedDraft.status === 'SENT' && (
                           <span className="text-xs font-mono text-emerald-400">

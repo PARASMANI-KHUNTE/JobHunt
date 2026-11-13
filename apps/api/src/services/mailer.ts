@@ -135,14 +135,16 @@ export async function dispatchApprovedEmail(req: OutboundEmailRequest): Promise<
   }
 
   // 4. Default when no external SMTP API key is configured yet:
-  // Records the approved send in CRM outbox and provides direct Gmail / mailto links
+  // Records the approved send in CRM outbox and provides direct Gmail / mailto links.
+  // Nothing was actually transmitted here, so `delivered` must be false; the UI
+  // surfaces `note` and the compose links for the human to send.
   return {
-    delivered: true,
+    delivered: false,
     provider: 'MAIL_CLIENT_READY',
     provider_message_id: `msg_${crypto.randomBytes(6).toString('hex')}@jobhunt-os.outbox`,
     mailto_url,
     gmail_compose_url,
-    note: 'Recorded in CRM Outbox. Add RESEND_API_KEY or SENDGRID_API_KEY in .env for server-side SMTP, or click "Open in Gmail" / "Open Mail App" to send directly from your email client.',
+    note: 'Recorded in CRM Outbox (not sent). Add RESEND_API_KEY or SENDGRID_API_KEY in .env for server-side SMTP, or click "Open in Gmail" / "Open Mail App" to send directly from your email client.',
   };
 }
 
