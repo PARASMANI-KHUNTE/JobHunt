@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
+import crypto from 'node:crypto';
 import { dbStore } from '../database/store.ts';
-import { isSafeExternalUrl } from '../services/coreEngine.ts';
+import { isSafeExternalUrl, getCompanyCareerPage } from '../services/coreEngine.ts';
 import { buildMailClientLinks } from '../services/mailer.ts';
 import { ApplicationStatus } from '../../../../packages/contracts/src/index.ts';
 
@@ -25,11 +26,16 @@ function sendError(
 
 // ============================================================================
 // 6.1 Authentication and Candidate Profile
+// NOTE: These auth endpoints are development-only stubs with no real credential
+// verification. In production, integrate an identity provider (e.g. NextAuth,
+// Auth0, Supabase Auth, or password hashing with bcrypt/argon2 + signed JWTs).
+// TODO: Implement full user registration, password verification, and JWT signing.
 // ============================================================================
 
 v1Router.post('/auth/login', (req: Request, res: Response) => {
   const email = typeof req.body?.email === 'string' ? req.body.email : '';
   const profile = dbStore.getProfile();
+  const sessionToken = `session_${crypto.randomBytes(24).toString('hex')}`;
   res.json({
     data: {
       user: {
@@ -38,18 +44,21 @@ v1Router.post('/auth/login', (req: Request, res: Response) => {
         timezone: profile?.preferences ? 'UTC' : 'UTC',
       },
       profile,
-      token: 'session_token',
+      token: sessionToken,
     },
   });
 });
 
 v1Router.post('/auth/register', (req: Request, res: Response) => {
+  // TODO: Persist registered user into database store with hashed password
   const email = typeof req.body?.email === 'string' ? req.body.email : '';
+  const sessionToken = `session_${crypto.randomBytes(24).toString('hex')}`;
   res.status(201).json({
     data: {
       id: dbStore.defaultUserId,
       email,
       timezone: 'UTC',
+      token: sessionToken,
     },
   });
 });
@@ -287,7 +296,7 @@ v1Router.post('/profile/skills', (req: Request, res: Response) => {
       years_experience !== undefined ? Number(years_experience) : 1.0
     );
     // Increment profile version & re-evaluate jobs
-    const profile = dbStore.updateProfile(dbStore.defaultUserId, {});
+    const profile = dbStore.bumpProfileVersion(dbStore.defaultProfileId);
     for (const job of dbStore.jobs.values()) {
       if (job.status === 'ACTIVE') {
         dbStore.evaluateAndPersistJob(job.id, profile.id);
@@ -305,7 +314,7 @@ v1Router.delete('/profile/skills/:id', (req: Request, res: Response) => {
   if (!deleted) {
     return sendError(res, 404, 'NOT_FOUND', 'Skill not found on profile');
   }
-  const profile = dbStore.updateProfile(dbStore.defaultUserId, {});
+  const profile = dbStore.bumpProfileVersion(dbStore.defaultProfileId);
   for (const job of dbStore.jobs.values()) {
     if (job.status === 'ACTIVE') {
       dbStore.evaluateAndPersistJob(job.id, profile.id);
@@ -339,7 +348,7 @@ v1Router.get('/companies', (req: Request, res: Response) => {
   const stageFilter = String(req.query.stage || '').toUpperCase().trim();
 
   let list = Array.from(dbStore.companies.values()).map((c) => {
-    const funding = Array.from(dbStore.fundingRounds.values()).filter((f) => f.company_id === c.id);
+    const funding = dbStore.getFundingRoundsForCompany(c.id);
     const signals = Array.from(dbStore.companySignals.values()).filter((s) => s.company_id === c.id);
     const openJobsCount = Array.from(dbStore.jobs.values()).filter(
       (j) => j.company_id === c.id && j.status === 'ACTIVE'
@@ -347,7 +356,7 @@ v1Router.get('/companies', (req: Request, res: Response) => {
     const sources = Array.from(dbStore.jobSources.values()).filter((s) => s.company_id === c.id);
     return {
       ...c,
-      career_page: (c.metadata?.career_page as string) || (c.website ? `${c.website.replace(/\/$/, '')}/careers` : null),
+      career_page: getCompanyCareerPage(c),
       ats_source_url: sources[0]?.source_url || null,
       funding_rounds: funding,
       latest_funding: funding[0] || null,
@@ -453,7 +462,7 @@ v1Router.get('/companies/:id', (req: Request, res: Response) => {
   const company = dbStore.companies.get(req.params.id);
   if (!company) return sendError(res, 404, 'NOT_FOUND', 'Company not found');
 
-  const funding = Array.from(dbStore.fundingRounds.values()).filter((f) => f.company_id === company.id);
+  const funding = dbStore.getFundingRoundsForCompany(company.id);
   const signals = Array.from(dbStore.companySignals.values()).filter((s) => s.company_id === company.id);
   const jobs = Array.from(dbStore.jobs.values()).filter((j) => j.company_id === company.id);
   const contacts = Array.from(dbStore.contacts.values()).filter((c) => c.company_id === company.id);
@@ -461,9 +470,7 @@ v1Router.get('/companies/:id', (req: Request, res: Response) => {
   res.json({
     data: {
       ...company,
-      career_page:
-        (company.metadata?.career_page as string) ||
-        (company.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+      career_page: getCompanyCareerPage(company),
       funding_rounds: funding,
       signals,
       jobs,
@@ -473,9 +480,7 @@ v1Router.get('/companies/:id', (req: Request, res: Response) => {
 });
 
 v1Router.get('/companies/:id/funding', (req: Request, res: Response) => {
-  const rounds = Array.from(dbStore.fundingRounds.values()).filter(
-    (f) => f.company_id === req.params.id
-  );
+  const rounds = dbStore.getFundingRoundsForCompany(req.params.id);
   res.json({ data: rounds });
 });
 
@@ -533,9 +538,7 @@ v1Router.get('/jobs', (req: Request, res: Response) => {
     const existingApp = Array.from(dbStore.applications.values()).find(
       (a) => a.job_id === j.id && a.profile_id === dbStore.defaultProfileId
     );
-    const companyCareerPage =
-      (company?.metadata?.career_page as string) ||
-      (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null);
+    const companyCareerPage = getCompanyCareerPage(company);
     return {
       ...j,
       company_name: company?.name || 'Unknown Company',
@@ -593,9 +596,7 @@ v1Router.get('/jobs/recent', (_req: Request, res: Response) => {
         ...j,
         company_name: company?.name || 'Company',
         company_website: company?.website || null,
-        company_career_page:
-          (company?.metadata?.career_page as string) ||
-          (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+        company_career_page: getCompanyCareerPage(company),
         evaluation: dbStore.getLatestEvaluationForJob(j.id),
       };
     });
@@ -628,9 +629,7 @@ v1Router.get('/jobs/:id', (req: Request, res: Response) => {
       ...job,
       company,
       company_website: company?.website || null,
-      company_career_page:
-        (company?.metadata?.career_page as string) ||
-        (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+      company_career_page: getCompanyCareerPage(company),
       evaluation,
       contacts,
     },
@@ -696,9 +695,7 @@ v1Router.get('/contacts', (_req: Request, res: Response) => {
       company_name: company?.name || 'Company',
       company_domain: company?.domain || null,
       company_website: company?.website || null,
-      company_career_page:
-        (company?.metadata?.career_page as string) ||
-        (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+      company_career_page: getCompanyCareerPage(company),
     };
   });
   res.json({ data: list });
@@ -734,9 +731,7 @@ v1Router.get('/outreach/drafts', (_req: Request, res: Response) => {
         job_title: job?.title || 'Engineering Role',
         job_apply_url: job?.apply_url || null,
         company_name: company?.name || 'Company',
-        company_career_page:
-          (company?.metadata?.career_page as string) ||
-          (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+        company_career_page: getCompanyCareerPage(company),
         mailto_url: mailLinks.mailto_url,
         gmail_compose_url: mailLinks.gmail_compose_url,
       };
@@ -840,9 +835,7 @@ v1Router.get('/applications', (_req: Request, res: Response) => {
       company_name: company?.name || 'Company',
       company_id: company?.id || '',
       company_website: company?.website || null,
-      company_career_page:
-        (company?.metadata?.career_page as string) ||
-        (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+      company_career_page: getCompanyCareerPage(company),
       score: evaluation?.score ?? null,
       history,
     };
@@ -1090,9 +1083,7 @@ v1Router.get('/monitoring/sources', (_req: Request, res: Response) => {
     return {
       ...s,
       company_name: company?.name || 'Company',
-      company_career_page:
-        (company?.metadata?.career_page as string) ||
-        (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+      company_career_page: getCompanyCareerPage(company),
       active_jobs_count: Array.from(dbStore.jobs.values()).filter(
         (j) => j.source_id === s.id && j.status === 'ACTIVE'
       ).length,

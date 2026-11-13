@@ -2,15 +2,23 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateEnv, getEnv } from './env.ts';
 
-test('validateEnv accepts default valid development configuration', () => {
-  const result = validateEnv({});
+test('validateEnv accepts valid development configuration with JWT_SECRET', () => {
+  const result = validateEnv({
+    JWT_SECRET: 'development-test-jwt-secret-with-minimum-32-chars',
+  });
   assert.equal(result.success, true);
   assert.ok(result.data);
   assert.equal(result.data?.PORT, 3000);
   assert.equal(result.data?.NODE_ENV, 'development');
   assert.equal(result.data?.LOG_LEVEL, 'info');
-  assert.ok(result.data?.DATABASE_URL.includes('postgresql://'));
+  assert.equal(result.data?.DATABASE_URL, 'postgresql://localhost:5432/jobhunt_os');
   assert.ok(result.data?.REDIS_URL.includes('redis://'));
+});
+
+test('validateEnv rejects missing JWT_SECRET', () => {
+  const result = validateEnv({});
+  assert.equal(result.success, false);
+  assert.ok(result.errors?.JWT_SECRET);
 });
 
 test('validateEnv parses custom valid environment parameters', () => {

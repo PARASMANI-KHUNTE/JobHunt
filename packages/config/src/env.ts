@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { z } from 'zod';
 
 export const EnvSchema = z.object({
@@ -5,9 +6,9 @@ export const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   APP_URL: z.string().url().default('http://localhost:3000'),
-  DATABASE_URL: z.string().min(1, 'DATABASE_URL is required').default('postgresql://jobhunt:jobhunt_dev_pwd@localhost:5432/jobhunt_os'),
+  DATABASE_URL: z.string().min(1, 'DATABASE_URL is required').default('postgresql://localhost:5432/jobhunt_os'),
   REDIS_URL: z.string().min(1, 'REDIS_URL is required').default('redis://localhost:6379/0'),
-  JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters long').default('dev-jwt-secret-replace-in-production-min-32-chars'),
+  JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters long'),
   GEMINI_API_KEY: z.string().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_CHAT_ID: z.string().optional(),

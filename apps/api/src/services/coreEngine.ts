@@ -44,6 +44,31 @@ export function extractNormalizedDomain(websiteUrl: string | null | undefined): 
   }
 }
 
+/**
+ * Derives a canonical career page URL for a company record or input object.
+ * Prioritizes explicitly verified metadata career pages, then falls back
+ * to `${website}/careers` if a website URL is present.
+ */
+export function getCompanyCareerPage(
+  company:
+    | {
+        website?: string | null;
+        metadata?: { career_page?: string | null; [key: string]: any };
+      }
+    | null
+    | undefined
+): string | null {
+  if (!company) return null;
+  const metaCareer = company.metadata?.career_page;
+  if (metaCareer && typeof metaCareer === 'string' && metaCareer.trim()) {
+    return metaCareer.trim();
+  }
+  if (company.website && typeof company.website === 'string' && company.website.trim()) {
+    return `${company.website.trim().replace(/\/+$/, '')}/careers`;
+  }
+  return null;
+}
+
 export function computeDescriptionHash(description: string): string {
   const normalized = description.trim().replace(/\s+/g, ' ').toLowerCase();
   return crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 32);
@@ -78,6 +103,18 @@ export function detectAtsProviderFromUrl(url: string | null | undefined): AtsPro
 // 2. Security: SSRF Protection & Untrusted Text Sanitization (Phase 10)
 // ============================================================================
 
+/**
+ * Validates an external URL against common SSRF vectors (loopback, private subnets, cloud metadata).
+ *
+ * SECURITY LIMITATION: Pure URL/hostname string validation does not defend against DNS
+ * rebinding attacks, where a malicious domain resolves to a public IP during this check
+ * but returns an internal/metadata IP during HTTP fetch.
+ * In a hardened production deployment:
+ * 1. Resolve DNS records upfront using a secure resolver.
+ * 2. Validate resolved IP addresses against private/reserved CIDRs.
+ * 3. Pin the HTTP client connection directly to the verified IP, or route external
+ *    outbound requests through a dedicated hardened egress proxy (e.g. Smokescreen / Envoy).
+ */
 export function isSafeExternalUrl(rawUrl: string): { safe: boolean; reason?: string } {
   try {
     const parsed = new URL(rawUrl);
