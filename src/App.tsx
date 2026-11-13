@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   LayoutDashboard,
   Briefcase,
@@ -11,11 +11,26 @@ import {
   ArrowRight,
   ExternalLink,
   RefreshCw,
+  AlertTriangle,
+  CheckCircle2,
+  Info,
+  RotateCw,
+  Bell,
+  Sparkles,
+  Circle,
+  Loader2,
 } from 'lucide-react';
 import { JobsAndEvaluatorView } from './features/JobsAndEvaluatorView.tsx';
 import { CompaniesAndFundingView } from './features/CompaniesAndFundingView.tsx';
 import { PipelineAndContactsView } from './features/PipelineAndContactsView.tsx';
 import { ProfileAndAgentsView } from './features/ProfileAndAgentsView.tsx';
+import { Banner, relativeTime, extractApiError, type BannerTone } from './lib/ui.ts';
+import type {
+  ParseResumePayload,
+  ParseResumeResult,
+  ApplyResumePayload,
+  ApplyResumeResult,
+} from './lib/resume.ts';
 
 type NavSection =
   | 'overview'
@@ -25,12 +40,49 @@ type NavSection =
   | 'profile'
   | 'agents';
 
+// Server-side stages of the full discovery pipeline (displayed as a stepper overlay)
+const PIPELINE_STAGES = [
+  { label: 'Funding Scout', desc: 'Import funded startups & rounds' },
+  { label: 'Company Investigator', desc: 'Verify websites & register ATS sources' },
+  { label: 'Live Job Hunter', desc: 'Poll Greenhouse / Lever / Ashby over HTTP' },
+  { label: 'Match Evaluator', desc: 'Hard filters + 100-point scoring' },
+  { label: 'Contact Finder', desc: 'Public recruiter contacts & provenance' },
+];
+
+function summarizePipelineOutput(output: any): string {
+  if (!output) return 'Full Discovery Pipeline completed.';
+  const parts: string[] = [];
+  if (output.funding_scout)
+    parts.push(`Scout +${output.funding_scout.new_companies_created ?? 0} companies`);
+  if (output.company_investigator)
+    parts.push(
+      `Investigator verified ${output.company_investigator.companies_investigated ?? 0} · +${output.company_investigator.new_sources_registered ?? 0} ATS sources`
+    );
+  if (output.job_hunter)
+    parts.push(
+      `Hunter +${output.job_hunter.new_jobs_count ?? 0} new / ${output.job_hunter.updated_jobs_count ?? 0} refreshed`
+    );
+  if (output.job_evaluator)
+    parts.push(
+      `Evaluator: ${output.job_evaluator.qualified ?? 0} qualified / ${output.job_evaluator.review ?? 0} review`
+    );
+  if (output.contact_finder)
+    parts.push(`Contacts +${output.contact_finder.new_contacts_found ?? 0}`);
+  return parts.length > 0
+    ? `Full Discovery Pipeline executed — ${parts.join(' · ')}.`
+    : 'Full Discovery Pipeline executed.';
+}
+
 export default function App() {
   const [activeSection, setActiveSection] = useState<NavSection>('overview');
   const [loading, setLoading] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
   const [runningPipeline, setRunningPipeline] = useState<boolean>(false);
+  const [pipelineStage, setPipelineStage] = useState<number>(-1); // -1 hidden, 0..4 in progress, 5 complete
   const [pollingLiveAts, setPollingLiveAts] = useState<boolean>(false);
-  const [bannerMessage, setBannerMessage] = useState<string | null>(null);
+  const [banner, setBanner] = useState<{ tone: BannerTone; text: string } | null>(null);
 
   // CRM State loaded from /api/v1/*
   const [overview, setOverview] = useState<any>(null);
@@ -46,7 +98,12 @@ export default function App() {
   const [agentRuns, setAgentRuns] = useState<any[]>([]);
   const [sources, setSources] = useState<any[]>([]);
 
+  // Cross-section workflow state
+  const [focusJobId, setFocusJobId] = useState<string | null>(null);
+  const [pipelineSubview, setPipelineSubview] = useState<'pipeline' | 'outreach'>('pipeline');
+
   const loadAllCrmData = useCallback(async () => {
+    setRefreshing(true);
     try {
       const [
         ovRes,
@@ -88,10 +145,18 @@ export default function App() {
       if (agRes.ok) setAgents((await agRes.json()).data);
       if (runsRes.ok) setAgentRuns((await runsRes.json()).data);
       if (srcRes.ok) setSources((await srcRes.json()).data);
+
+      const allFailed = [ovRes, pipeRes, alertsRes, jobsRes, compRes, appsRes, contactsRes, draftsRes, profRes, agRes, runsRes, srcRes].every(
+        (r) => !r.ok
+      );
+      setLoadError(allFailed ? 'CRM API unreachable — is the JobHunt OS server running?' : null);
+      if (!allFailed) setLastRefreshed(new Date());
     } catch (err) {
       console.error('Failed to load CRM data:', err);
+      setLoadError('CRM API unreachable — is the JobHunt OS server running?');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
@@ -99,23 +164,57 @@ export default function App() {
     loadAllCrmData();
   }, [loadAllCrmData]);
 
-  // End-to-End Discovery Pipeline Trigger
+  // Auto-dismiss success/info banners after 8 seconds (errors stay until dismissed)
+  useEffect(() => {
+    if (!banner || banner.tone === 'error') return;
+    const t = setTimeout(() => setBanner(null), 8000);
+    return () => clearTimeout(t);
+  }, [banner]);
+
+  // Keyboard shortcuts: 1–6 switch sections (ignored while typing in fields)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      )
+        return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const order: NavSection[] = ['overview', 'jobs', 'companies', 'pipeline', 'profile', 'agents'];
+      const idx = Number(e.key);
+      if (idx >= 1 && idx <= 6) setActiveSection(order[idx - 1]);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  // End-to-End Discovery Pipeline Trigger (5 deterministic stages)
   const handleRunFullPipeline = async () => {
     setRunningPipeline(true);
-    setBannerMessage(null);
+    setBanner(null);
+    setPipelineStage(0);
+    const timer = setInterval(() => setPipelineStage((s) => Math.min(s + 1, 4)), 1200);
     try {
       const res = await fetch('/api/v1/agents/full-pipeline/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ live_network: true }),
       });
-      if (!res.ok) throw new Error('Pipeline run failed');
+      if (!res.ok) throw new Error(await extractApiError(res, 'Pipeline run failed'));
+      const json = await res.json();
+      clearInterval(timer);
+      setPipelineStage(5);
       await loadAllCrmData();
-      setBannerMessage(
-        'Full Discovery Pipeline executed: Funding Scout → Investigator → Live ATS Job Hunter → Evaluator → Contact Finder completed with idempotent notifications.'
-      );
+      setBanner({ tone: 'success', text: summarizePipelineOutput(json.data?.output) });
+      setTimeout(() => setPipelineStage(-1), 1400);
     } catch (err: any) {
-      setBannerMessage(`Pipeline error: ${err.message}`);
+      clearInterval(timer);
+      setPipelineStage(-1);
+      setBanner({ tone: 'error', text: `Pipeline error: ${err.message}` });
     } finally {
       setRunningPipeline(false);
     }
@@ -124,31 +223,34 @@ export default function App() {
   // Real-Time Live ATS Poll (Greenhouse & Ashby Public APIs)
   const handlePollLiveAts = async () => {
     setPollingLiveAts(true);
-    setBannerMessage(null);
+    setBanner(null);
     try {
       const res = await fetch('/api/v1/jobs/poll-live', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
-      if (!res.ok) throw new Error('Live ATS poll failed');
+      if (!res.ok) throw new Error(await extractApiError(res, 'Live ATS poll failed'));
       const json = await res.json();
-      const inserted = json.data?.hunter_run?.output?.inserted ?? 0;
-      const updated = json.data?.hunter_run?.output?.updated ?? 0;
-      const liveFetched = json.data?.hunter_run?.output?.live_fetched ?? 0;
+      const output = json.data?.hunter_run?.output || {};
+      const liveFetched = output.live_network_jobs_fetched ?? 0;
+      const inserted = output.new_jobs_count ?? 0;
+      const updated = output.updated_jobs_count ?? 0;
       await loadAllCrmData();
-      setBannerMessage(
-        `Live ATS Poll completed over HTTP (Greenhouse & Ashby): ${liveFetched} live postings fetched, ${inserted} new jobs added, ${updated} existing jobs refreshed & evaluated.`
-      );
+      setBanner({
+        tone: 'success',
+        text: `Live ATS Poll completed over HTTP (Greenhouse & Ashby): ${liveFetched} live postings fetched · ${inserted} new jobs added · ${updated} existing jobs refreshed & re-evaluated.`,
+      });
     } catch (err: any) {
-      setBannerMessage(`Live ATS poll error: ${err.message}`);
+      setBanner({ tone: 'error', text: `Live ATS poll error: ${err.message}` });
     } finally {
       setPollingLiveAts(false);
     }
   };
 
-  // Action Handlers passed to Feature Views
+  // Action Handlers passed to Feature Views (all surface API errors)
   const handleEvaluateJob = async (jobId: string) => {
-    await fetch(`/api/v1/jobs/${jobId}/evaluate`, { method: 'POST' });
+    const res = await fetch(`/api/v1/jobs/${jobId}/evaluate`, { method: 'POST' });
+    if (!res.ok) throw new Error(await extractApiError(res, 'Re-evaluation failed'));
     await loadAllCrmData();
   };
 
@@ -158,24 +260,42 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'SAVED' }),
     });
-    if (!res.ok) {
-      const errJson = await res.json();
-      throw new Error(errJson.error?.message || 'Already in pipeline');
-    }
+    if (!res.ok) throw new Error(await extractApiError(res, 'Already in pipeline'));
     await loadAllCrmData();
   };
 
   const handleCreateDraftForJob = async (jobId: string, companyId: string) => {
-    const companyContact =
-      contacts.find((c) => c.company_id === companyId) || contacts[0];
-    if (!companyContact) return;
-    await fetch('/api/v1/outreach/drafts', {
+    const companyContact = contacts.find((c) => c.company_id === companyId);
+    if (!companyContact) {
+      setBanner({
+        tone: 'error',
+        text: 'No public contact found for this company yet — run Contact Finder in Pipeline & Outreach first.',
+      });
+      return;
+    }
+    const existing = drafts.find((d) => d.contact_id === companyContact.id && d.job_id === jobId);
+    if (existing) {
+      setPipelineSubview('outreach');
+      setActiveSection('pipeline');
+      setBanner({
+        tone: 'info',
+        text: `A draft to ${companyContact.name} for this job already exists — review it in the Outreach queue.`,
+      });
+      return;
+    }
+    const res = await fetch('/api/v1/outreach/drafts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contact_id: companyContact.id, job_id: jobId }),
     });
+    if (!res.ok) throw new Error(await extractApiError(res, 'Failed to create outreach draft'));
     await loadAllCrmData();
+    setPipelineSubview('outreach');
     setActiveSection('pipeline');
+    setBanner({
+      tone: 'success',
+      text: `Personalized draft generated for ${companyContact.name} — locked to PENDING_APPROVAL until you approve it.`,
+    });
   };
 
   const handleAddCompany = async (payload: Record<string, any>) => {
@@ -184,15 +304,13 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) {
-      const errJson = await res.json();
-      throw new Error(errJson.error?.message || 'Failed to add company');
-    }
+    if (!res.ok) throw new Error(await extractApiError(res, 'Failed to add company'));
     await loadAllCrmData();
   };
 
   const handleInvestigateCompany = async (companyId: string) => {
-    await fetch(`/api/v1/companies/${companyId}/investigate`, { method: 'POST' });
+    const res = await fetch(`/api/v1/companies/${companyId}/investigate`, { method: 'POST' });
+    if (!res.ok) throw new Error(await extractApiError(res, 'Investigation failed'));
     await loadAllCrmData();
   };
 
@@ -206,28 +324,37 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: newStatus, notes }),
     });
-    if (!res.ok) {
-      const errJson = await res.json();
-      throw new Error(errJson.error?.message || 'Invalid transition');
-    }
+    if (!res.ok) throw new Error(await extractApiError(res, 'Invalid transition'));
     await loadAllCrmData();
   };
 
   const handleAddApplicationNote = async (appId: string, notes: string) => {
-    await fetch(`/api/v1/applications/${appId}/events`, {
+    const res = await fetch(`/api/v1/applications/${appId}/events`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ notes }),
     });
+    if (!res.ok) throw new Error(await extractApiError(res, 'Could not append activity note'));
     await loadAllCrmData();
   };
 
   const handleUpdateDraft = async (draftId: string, subject: string, body: string) => {
-    await fetch(`/api/v1/outreach/drafts/${draftId}`, {
+    const res = await fetch(`/api/v1/outreach/drafts/${draftId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subject, body }),
     });
+    if (!res.ok) throw new Error(await extractApiError(res, 'Draft save failed'));
+    await loadAllCrmData();
+  };
+
+  const handleDiscardDraft = async (draftId: string) => {
+    const res = await fetch(`/api/v1/outreach/drafts/${draftId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'DISCARDED' }),
+    });
+    if (!res.ok) throw new Error(await extractApiError(res, 'Could not discard draft'));
     await loadAllCrmData();
   };
 
@@ -235,10 +362,7 @@ export default function App() {
     const res = await fetch(`/api/v1/outreach/drafts/${draftId}/approve`, {
       method: 'POST',
     });
-    if (!res.ok) {
-      const errJson = await res.json();
-      throw new Error(errJson.error?.message || 'Approval failed');
-    }
+    if (!res.ok) throw new Error(await extractApiError(res, 'Approval failed'));
     await loadAllCrmData();
   };
 
@@ -251,10 +375,7 @@ export default function App() {
       },
       body: JSON.stringify({}),
     });
-    if (!res.ok) {
-      const errJson = await res.json();
-      throw new Error(errJson.error?.message || 'Send blocked by safety policy');
-    }
+    if (!res.ok) throw new Error(await extractApiError(res, 'Send blocked by safety policy'));
     const result = await res.json();
     await loadAllCrmData();
     return result.data;
@@ -266,10 +387,7 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) {
-      const errJson = await res.json();
-      throw new Error(errJson.error?.message || 'Update failed');
-    }
+    if (!res.ok) throw new Error(await extractApiError(res, 'Update failed'));
     await loadAllCrmData();
   };
 
@@ -283,37 +401,64 @@ export default function App() {
         years_experience: years,
       }),
     });
-    if (!res.ok) {
-      const errJson = await res.json();
-      throw new Error(errJson.error?.message || 'Skill already exists');
-    }
+    if (!res.ok) throw new Error(await extractApiError(res, 'Skill already exists'));
     await loadAllCrmData();
   };
 
   const handleDeleteSkill = async (skillId: string) => {
-    await fetch(`/api/v1/profile/skills/${skillId}`, { method: 'DELETE' });
+    const res = await fetch(`/api/v1/profile/skills/${skillId}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(await extractApiError(res, 'Could not remove skill'));
     await loadAllCrmData();
   };
 
+  // Resume Import: parse-only (no persistence) — user reviews before applying
+  const handleParseResume = async (payload: ParseResumePayload): Promise<ParseResumeResult> => {
+    const res = await fetch('/api/v1/profile/resume/parse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await extractApiError(res, 'Resume parsing failed'));
+    const json = await res.json();
+    return json.data as ParseResumeResult;
+  };
+
+  // Resume Import: apply reviewed data to the profile (persist + re-score jobs)
+  const handleApplyResume = async (payload: ApplyResumePayload): Promise<ApplyResumeResult> => {
+    const res = await fetch('/api/v1/profile/resume/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await extractApiError(res, 'Resume import failed'));
+    const json = await res.json();
+    await loadAllCrmData();
+    return json.data as ApplyResumeResult;
+  };
+
   const handleTriggerAgent = async (agentName: string) => {
-    await fetch(`/api/v1/agents/${agentName}/run`, {
+    const res = await fetch(`/api/v1/agents/${agentName}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ live_network: agentName === 'job-hunter' }),
     });
+    if (!res.ok) throw new Error(await extractApiError(res, `Agent ${agentName} run failed`));
     await loadAllCrmData();
   };
 
   const handleCheckSource = async (sourceId: string) => {
-    await fetch(`/api/v1/monitoring/sources/${sourceId}/check`, { method: 'POST' });
+    const res = await fetch(`/api/v1/monitoring/sources/${sourceId}/check`, { method: 'POST' });
+    if (!res.ok) throw new Error(await extractApiError(res, 'Source check failed'));
     await loadAllCrmData();
   };
 
   const handleMarkAlertRead = async (alertId: string) => {
-    await fetch(`/api/v1/dashboard/alerts/${alertId}/read`, { method: 'PATCH' });
+    const res = await fetch(`/api/v1/dashboard/alerts/${alertId}/read`, { method: 'PATCH' });
+    if (!res.ok) throw new Error(await extractApiError(res, 'Could not mark alert as read'));
     await loadAllCrmData();
   };
 
+  // Navigation metadata
   const sectionLabels: Record<NavSection, string> = {
     overview: 'CRM Overview & Alerts',
     jobs: 'Jobs & Match Evaluator',
@@ -323,31 +468,76 @@ export default function App() {
     agents: 'Agents & ATS Sources',
   };
 
+  const unreadAlertCount = alerts.filter((a) => !a.read_at).length;
+
   const navItems: Array<{ id: NavSection; label: string; icon: React.ComponentType<any>; count?: number }> = [
-    { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+    { id: 'overview', label: 'Overview', icon: LayoutDashboard, count: unreadAlertCount > 0 ? unreadAlertCount : undefined },
     { id: 'jobs', label: 'Jobs & Evaluator', icon: Briefcase, count: jobs.length },
     { id: 'companies', label: 'Companies & Funding', icon: Building2, count: companies.length },
     { id: 'pipeline', label: 'Pipeline & Outreach', icon: Kanban, count: applications.length },
-    { id: 'profile', label: 'Candidate Profile', icon: UserCheck },
+    { id: 'profile', label: 'Candidate Profile', icon: UserCheck, count: profile?.skills?.length },
     { id: 'agents', label: 'Agents & Sources', icon: Cpu, count: sources.length },
   ];
 
   const metrics = overview?.metrics || {};
-  const qualifiedJobsList = jobs.filter((j) => j.evaluation?.decision === 'QUALIFIED');
+  const qualifiedJobsList = useMemo(
+    () => jobs.filter((j) => j.evaluation?.decision === 'QUALIFIED'),
+    [jobs]
+  );
+
+  // Onboarding checklist state (drives the first-run workflow)
+  const onboarding = useMemo(() => {
+    const profileDone = Boolean(profile?.full_name) && (profile?.skills?.length ?? 0) > 0;
+    const companiesDone = companies.length > 0;
+    const sourcesDone = sources.length > 0;
+    const jobsDone = jobs.length > 0;
+    const allDone = profileDone && companiesDone && sourcesDone && jobsDone;
+    return { profileDone, companiesDone, sourcesDone, jobsDone, allDone };
+  }, [profile, companies, sources, jobs]);
+
+  const funnelSegments = [
+    { key: 'SAVED', label: 'Saved', tone: 'bg-slate-500' },
+    { key: 'READY_TO_APPLY', label: 'Ready', tone: 'bg-amber-500' },
+    { key: 'APPLIED', label: 'Applied', tone: 'bg-indigo-500' },
+    { key: 'SHORTLISTED', label: 'Shortlisted', tone: 'bg-cyan-500' },
+    { key: 'INTERVIEWING', label: 'Interviewing', tone: 'bg-sky-400' },
+    { key: 'OFFER', label: 'Offer', tone: 'bg-emerald-500' },
+    { key: 'REJECTED', label: 'Rejected', tone: 'bg-rose-500' },
+    { key: 'GHOSTED', label: 'Ghosted', tone: 'bg-slate-700' },
+  ].filter((seg) => (pipelineCounts[seg.key] || 0) > 0);
+
+  const funnelTotal = funnelSegments.reduce((sum, seg) => sum + (pipelineCounts[seg.key] || 0), 0);
+
+  const bannerStyles: Record<BannerTone, string> = {
+    success: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+    error: 'border-rose-500/40 bg-rose-500/10 text-rose-300',
+    info: 'border-indigo-500/40 bg-indigo-500/10 text-indigo-300',
+  };
+  const bannerIcon: Record<BannerTone, React.ReactNode> = {
+    success: <CheckCircle2 className="w-4 h-4 shrink-0" />,
+    error: <AlertTriangle className="w-4 h-4 shrink-0" />,
+    info: <Info className="w-4 h-4 shrink-0" />,
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col lg:flex-row font-sans">
       {/* Sidebar Navigation (256px width on desktop) */}
       <aside className="w-full lg:w-64 bg-slate-900/90 border-b lg:border-b-0 lg:border-r border-slate-800 shrink-0 flex flex-col justify-between">
         <div>
-          <div className="h-16 px-6 flex items-center border-b border-slate-800">
+          <div className="h-16 px-6 flex items-center justify-between border-b border-slate-800">
             <span className="text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0">
               JobHunt OS
             </span>
+            {unreadAlertCount > 0 && (
+              <span className="flex items-center gap-1 text-[11px] font-medium text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded-full">
+                <Bell className="w-3 h-3" />
+                {unreadAlertCount}
+              </span>
+            )}
           </div>
 
           <nav className="p-3 flex lg:flex-col gap-1 overflow-x-auto" aria-label="Primary CRM Navigation">
-            {navItems.map((item) => {
+            {navItems.map((item, idx) => {
               const Icon = item.icon;
               const isActive = activeSection === item.id;
               return (
@@ -355,6 +545,7 @@ export default function App() {
                   key={item.id}
                   type="button"
                   onClick={() => setActiveSection(item.id)}
+                  title={`${item.label} (shortcut: ${idx + 1})`}
                   className={`flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
                     isActive
                       ? 'bg-indigo-600 text-white'
@@ -365,10 +556,14 @@ export default function App() {
                     <Icon className="w-4 h-4 shrink-0" />
                     <span>{item.label}</span>
                   </div>
-                  {item.count !== undefined && (
+                  {item.count !== undefined && item.count > 0 && (
                     <span
-                      className={`font-mono tabular-nums text-[11px] ${
-                        isActive ? 'text-indigo-100' : 'text-slate-500'
+                      className={`font-mono tabular-nums text-[11px] px-1.5 rounded ${
+                        isActive
+                          ? 'text-indigo-100 bg-indigo-500/40'
+                          : item.id === 'overview'
+                          ? 'text-amber-400'
+                          : 'text-slate-500'
                       }`}
                     >
                       {item.count}
@@ -380,24 +575,27 @@ export default function App() {
           </nav>
         </div>
 
-        {/* Candidate Profile Summary in Sidebar Footer */}
+        {/* Candidate Profile Summary in Sidebar Footer (real data) */}
         <div className="hidden lg:block p-4 border-t border-slate-800 text-xs space-y-1">
           <div className="font-semibold text-slate-200 truncate">
-            {profile?.full_name || 'Paras Manikhunte'}
+            {profile?.full_name || 'Candidate profile not set'}
           </div>
           <div className="text-slate-400 font-mono tabular-nums">
-            Profile v{profile?.profile_version || 1} · {profile?.skills?.length || 8} skills
+            Profile v{profile?.profile_version ?? 1} · {profile?.skills?.length ?? 0} skills
           </div>
           <div className="text-[11px] text-slate-500">
-            Target: Remote · ≥ INR 7,00,000
+            Target:{' '}
+            {profile?.preferences?.remote_only ? 'Remote' : 'Any mode'} · ≥{' '}
+            {(profile?.preferences?.minimum_salary ?? 0).toLocaleString()}{' '}
+            {profile?.preferences?.salary_currency || 'INR'}
           </div>
         </div>
       </aside>
 
       {/* Main Content Workspace */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Top Bar Contract: Breadcrumb on Left — Primary Action on Right */}
-        <header className="h-16 px-6 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between gap-8">
+        {/* Top Bar: Breadcrumb + Workspace Actions */}
+        <header className="h-16 px-6 border-b border-slate-800 bg-slate-900/50 flex items-center justify-between gap-4">
           <div className="text-sm font-medium text-slate-300 truncate">
             <span className="text-slate-500">Workspace</span>
             <span className="mx-2 text-slate-600">/</span>
@@ -405,11 +603,27 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2.5 shrink-0">
+            {lastRefreshed && (
+              <span className="hidden xl:flex items-center gap-1.5 text-[11px] text-slate-500 font-mono tabular-nums">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                Synced {relativeTime(lastRefreshed.toISOString())}
+              </span>
+            )}
             <button
               type="button"
-              disabled={pollingLiveAts}
+              onClick={loadAllCrmData}
+              disabled={refreshing}
+              title="Reload all CRM data"
+              className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded-lg transition-colors"
+            >
+              <RotateCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+            </button>
+
+            <button
+              type="button"
+              disabled={pollingLiveAts || runningPipeline}
               onClick={handlePollLiveAts}
-              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-100 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${pollingLiveAts ? 'animate-spin' : ''}`} />
               <span>{pollingLiveAts ? 'Fetching Live ATS...' : 'Poll Live ATS Jobs'}</span>
@@ -417,9 +631,9 @@ export default function App() {
 
             <button
               type="button"
-              disabled={runningPipeline}
+              disabled={runningPipeline || pollingLiveAts}
               onClick={handleRunFullPipeline}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Play className="w-3.5 h-3.5" />
               <span>{runningPipeline ? 'Running Pipeline...' : 'Run Discovery Pipeline'}</span>
@@ -429,16 +643,84 @@ export default function App() {
 
         {/* Main Viewport */}
         <main className="flex-1 p-6 max-w-7xl w-full mx-auto space-y-6">
-          {bannerMessage && (
-            <div className="px-4 py-3 rounded-xl bg-slate-900 border border-slate-800 text-xs text-emerald-400 flex items-center justify-between gap-4">
-              <span>{bannerMessage}</span>
+          {loadError && (
+            <div className="px-4 py-3 rounded-xl bg-rose-500/10 border border-rose-500/40 text-xs text-rose-300 flex items-center justify-between gap-4">
+              <span className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                {loadError}
+              </span>
               <button
                 type="button"
-                onClick={() => setBannerMessage(null)}
+                onClick={loadAllCrmData}
+                className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 rounded-lg font-medium shrink-0"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {banner && (
+            <div
+              className={`px-4 py-3 rounded-xl border text-xs flex items-start justify-between gap-4 ${bannerStyles[banner.tone]}`}
+              role="status"
+            >
+              <span className="flex items-start gap-2 leading-relaxed">
+                {bannerIcon[banner.tone]}
+                <span>{banner.text}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setBanner(null)}
                 className="text-slate-400 hover:text-white shrink-0"
+                aria-label="Dismiss notification"
               >
                 Dismiss
               </button>
+            </div>
+          )}
+
+          {/* Full Pipeline Stage Overlay */}
+          {pipelineStage >= 0 && (
+            <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-indigo-400" />
+                  Discovery Pipeline — 5 Deterministic Stages
+                </h2>
+                <span className="text-xs font-mono text-indigo-300">
+                  {pipelineStage >= 5 ? 'COMPLETED' : `Stage ${Math.min(pipelineStage + 1, 5)} / 5`}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
+                {PIPELINE_STAGES.map((stage, idx) => {
+                  const done = pipelineStage > idx || pipelineStage >= 5;
+                  const active = pipelineStage === idx && pipelineStage < 5;
+                  return (
+                    <div
+                      key={stage.label}
+                      className={`p-3 rounded-lg border text-xs space-y-1 transition-colors ${
+                        done
+                          ? 'border-emerald-500/40 bg-emerald-500/10'
+                          : active
+                          ? 'border-indigo-500/50 bg-indigo-500/10'
+                          : 'border-slate-800 bg-slate-950/60'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 font-semibold text-slate-200">
+                        {done ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        ) : active ? (
+                          <Loader2 className="w-3.5 h-3.5 text-indigo-400 shrink-0 animate-spin" />
+                        ) : (
+                          <Circle className="w-3 h-3 text-slate-600 shrink-0" />
+                        )}
+                        <span>{stage.label}</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 leading-snug">{stage.desc}</p>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
@@ -459,34 +741,97 @@ export default function App() {
               {/* 1. OVERVIEW DASHBOARD */}
               {activeSection === 'overview' && (
                 <div className="space-y-6">
-                  {/* Top Metric Strip (Tabular Numerals, Single Elevation) */}
+                  {/* First-Run Onboarding Checklist (hidden once workflow is live) */}
+                  {!onboarding.allDone && (
+                    <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-5">
+                      <h2 className="text-sm font-semibold text-white flex items-center gap-2 mb-1">
+                        <Sparkles className="w-4 h-4 text-indigo-400" />
+                        Getting Started — Bootstrap Your Live Job Pipeline
+                      </h2>
+                      <p className="text-xs text-slate-400 mb-4">
+                        JobHunt OS stores no mock data. Complete these steps once to activate
+                        real, evidence-backed job discovery.
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                        {[
+                          {
+                            done: onboarding.profileDone,
+                            title: '1. Candidate Profile',
+                            desc: 'Upload resume (auto-fills skills) or fill manually',
+                            target: 'profile' as NavSection,
+                          },
+                          {
+                            done: onboarding.companiesDone,
+                            title: '2. Register Companies',
+                            desc: 'Add target companies manually',
+                            target: 'companies' as NavSection,
+                          },
+                          {
+                            done: onboarding.sourcesDone,
+                            title: '3. Detect ATS Sources',
+                            desc: 'Investigate → register ATS endpoints',
+                            target: 'agents' as NavSection,
+                          },
+                          {
+                            done: onboarding.jobsDone,
+                            title: '4. Poll Live ATS Jobs',
+                            desc: 'Fetch real openings & evaluate',
+                            target: 'jobs' as NavSection,
+                          },
+                        ].map((step) => (
+                          <button
+                            key={step.title}
+                            type="button"
+                            onClick={() => setActiveSection(step.target)}
+                            className={`p-3.5 rounded-lg border text-left transition-colors ${
+                              step.done
+                                ? 'border-emerald-500/40 bg-emerald-500/10'
+                                : 'border-slate-800 bg-slate-950/60 hover:border-indigo-500/50'
+                            }`}
+                          >
+                            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-200">
+                              {step.done ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                              ) : (
+                                <Circle className="w-3 h-3 text-slate-600 shrink-0" />
+                              )}
+                              <span>{step.title}</span>
+                            </div>
+                            <p className="text-[11px] text-slate-500 mt-1.5 leading-snug">{step.desc}</p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Top Metric Strip (real values only — no mock fallbacks) */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800">
                       <span className="text-xs text-slate-400">Verified Companies</span>
                       <div className="text-2xl font-bold text-white font-mono tabular-nums mt-1">
-                        {metrics.verified_companies_count ?? 4}
+                        {metrics.verified_companies_count ?? 0}
                       </div>
                       <p className="text-xs text-slate-400 mt-1 font-mono tabular-nums">
-                        {metrics.verified_website_rate ?? 100}% website provenance ·{' '}
-                        {metrics.active_sources_count ?? 4} ATS sources
+                        {(metrics.verified_website_rate ?? 0)}% website provenance ·{' '}
+                        {metrics.active_sources_count ?? 0} ATS sources
                       </p>
                     </div>
 
                     <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800">
                       <span className="text-xs text-slate-400">Qualified Opportunities</span>
                       <div className="text-2xl font-bold text-emerald-400 font-mono tabular-nums mt-1">
-                        {metrics.qualified_jobs_count ?? 3}
+                        {metrics.qualified_jobs_count ?? 0}
                       </div>
                       <p className="text-xs text-slate-400 mt-1 font-mono tabular-nums">
-                        Out of {metrics.unique_jobs_count ?? 5} unique jobs ·{' '}
-                        {metrics.review_jobs_count ?? 1} in review
+                        Out of {metrics.unique_jobs_count ?? 0} unique jobs ·{' '}
+                        {metrics.review_jobs_count ?? 0} in review
                       </p>
                     </div>
 
                     <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800">
                       <span className="text-xs text-slate-400">Active CRM Applications</span>
                       <div className="text-2xl font-bold text-white font-mono tabular-nums mt-1">
-                        {metrics.applications_tracked_count ?? 2}
+                        {metrics.applications_tracked_count ?? 0}
                       </div>
                       <p className="text-xs text-slate-400 mt-1 font-mono tabular-nums">
                         Ready: {pipelineCounts.READY_TO_APPLY || 0} · Applied:{' '}
@@ -497,15 +842,54 @@ export default function App() {
                     <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800">
                       <span className="text-xs text-slate-400">Outreach & Public Contacts</span>
                       <div className="text-2xl font-bold text-white font-mono tabular-nums mt-1">
-                        {metrics.pending_drafts_count ?? 2}
+                        {metrics.pending_drafts_count ?? 0}
                         <span className="text-sm font-normal text-slate-400"> pending approval</span>
                       </div>
                       <p className="text-xs text-slate-400 mt-1 font-mono tabular-nums">
-                        {metrics.verified_contacts_count ?? 2} verified contacts ·{' '}
+                        {metrics.verified_contacts_count ?? 0} verified contacts ·{' '}
                         {metrics.sent_drafts_count ?? 0} sent
                       </p>
                     </div>
                   </div>
+
+                  {/* Application Lifecycle Funnel */}
+                  {funnelTotal > 0 && (
+                    <div className="rounded-xl bg-slate-900/60 border border-slate-800 p-5">
+                      <div className="flex items-center justify-between mb-3">
+                        <h2 className="text-sm font-semibold text-white">Application Funnel</h2>
+                        <button
+                          type="button"
+                          onClick={() => setPipelineSubview('pipeline')}
+                          className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                        >
+                          Open Pipeline <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <div className="flex h-2.5 w-full rounded-full overflow-hidden bg-slate-950">
+                        {funnelSegments.map((seg) => (
+                          <div
+                            key={seg.key}
+                            className={seg.tone}
+                            style={{
+                              width: `${((pipelineCounts[seg.key] || 0) / funnelTotal) * 100}%`,
+                            }}
+                            title={`${seg.label}: ${pipelineCounts[seg.key]}`}
+                          />
+                        ))}
+                      </div>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2.5 text-[11px] text-slate-400">
+                        {funnelSegments.map((seg) => (
+                          <span key={seg.key} className="flex items-center gap-1.5">
+                            <span className={`w-2 h-2 rounded-sm ${seg.tone}`} />
+                            {seg.label}
+                            <span className="font-mono tabular-nums text-slate-300">
+                              {pipelineCounts[seg.key]}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Two-Column Split: Qualified Jobs Table + Idempotent Notifications */}
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -525,82 +909,116 @@ export default function App() {
                         </button>
                       </div>
 
-                      <div className="divide-y divide-slate-800/80">
-                        {qualifiedJobsList.map((job) => (
-                          <div
-                            key={job.id}
-                            className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-slate-800/30"
-                          >
-                            <div className="space-y-1">
-                              <h3 className="text-sm font-semibold text-white">{job.title}</h3>
-                              <div className="text-xs text-slate-400 flex flex-wrap items-center gap-1.5">
-                                <span className="text-slate-200 font-medium">
-                                  {job.company_name}
-                                </span>
-                                <span aria-hidden="true">·</span>
-                                <span>{job.work_mode}</span>
-                                <span aria-hidden="true">·</span>
-                                <span>{job.location}</span>
-                                <span aria-hidden="true">·</span>
-                                <span className="text-emerald-400">
-                                  Matched: {job.evaluation?.matched_skills?.join(', ')}
-                                </span>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-3 pt-1 text-xs">
-                                {job.company_career_page && (
-                                  <a
-                                    href={job.company_career_page}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-indigo-400 hover:text-indigo-300 hover:underline inline-flex items-center gap-1 font-medium"
-                                  >
-                                    <span>Careers Page</span>
-                                    <ExternalLink className="w-3 h-3" />
-                                  </a>
-                                )}
-                                {job.apply_url && (
-                                  <a
-                                    href={job.apply_url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-slate-300 hover:text-white hover:underline inline-flex items-center gap-1"
-                                  >
-                                    <span>Direct Apply / ATS</span>
-                                    <ExternalLink className="w-3 h-3" />
-                                  </a>
-                                )}
-                                {job.company_website && (
-                                  <a
-                                    href={job.company_website}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-slate-400 hover:text-slate-200 hover:underline inline-flex items-center gap-1"
-                                  >
-                                    <span>Website</span>
-                                    <ExternalLink className="w-3 h-3" />
-                                  </a>
-                                )}
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-3 shrink-0">
-                              <div className="text-right font-mono tabular-nums">
-                                <div className="text-sm font-bold text-emerald-400">
-                                  {job.evaluation?.score}/100
-                                </div>
-                                <div className="text-[11px] text-slate-500">QUALIFIED</div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => setActiveSection('jobs')}
-                                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-medium text-white rounded-lg whitespace-nowrap shrink-0"
-                              >
-                                View Breakdown
-                              </button>
-                            </div>
+                      {qualifiedJobsList.length === 0 ? (
+                        <div className="p-8 text-center space-y-3">
+                          <Briefcase className="w-8 h-8 text-slate-600 mx-auto" />
+                          <p className="text-sm text-slate-300">No qualified matches yet.</p>
+                          <p className="text-xs text-slate-500 max-w-sm mx-auto leading-relaxed">
+                            Run the Discovery Pipeline or Poll Live ATS Jobs to fetch real openings,
+                            then the evaluator will score them against your profile.
+                          </p>
+                          <div className="flex items-center justify-center gap-2 pt-1">
+                            <button
+                              type="button"
+                              disabled={runningPipeline}
+                              onClick={handleRunFullPipeline}
+                              className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium rounded-lg inline-flex items-center gap-1.5"
+                            >
+                              <Play className="w-3.5 h-3.5" />
+                              Run Pipeline
+                            </button>
+                            <button
+                              type="button"
+                              disabled={pollingLiveAts}
+                              onClick={handlePollLiveAts}
+                              className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-100 text-xs font-medium rounded-lg inline-flex items-center gap-1.5"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${pollingLiveAts ? 'animate-spin' : ''}`} />
+                              Poll Live ATS
+                            </button>
                           </div>
-                        ))}
-                      </div>
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-slate-800/80">
+                          {qualifiedJobsList.map((job) => (
+                            <div
+                              key={job.id}
+                              className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-slate-800/30"
+                            >
+                              <div className="space-y-1">
+                                <h3 className="text-sm font-semibold text-white">{job.title}</h3>
+                                <div className="text-xs text-slate-400 flex flex-wrap items-center gap-1.5">
+                                  <span className="text-slate-200 font-medium">
+                                    {job.company_name}
+                                  </span>
+                                  <span aria-hidden="true">·</span>
+                                  <span>{job.work_mode}</span>
+                                  <span aria-hidden="true">·</span>
+                                  <span>{job.location}</span>
+                                  <span aria-hidden="true">·</span>
+                                  <span className="text-emerald-400">
+                                    Matched: {job.evaluation?.matched_skills?.join(', ')}
+                                  </span>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-3 pt-1 text-xs">
+                                  {job.company_career_page && (
+                                    <a
+                                      href={job.company_career_page}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-indigo-400 hover:text-indigo-300 hover:underline inline-flex items-center gap-1 font-medium"
+                                    >
+                                      <span>Careers Page</span>
+                                      <ExternalLink className="w-3 h-3" />
+                                    </a>
+                                  )}
+                                  {job.apply_url && (
+                                    <a
+                                      href={job.apply_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-slate-300 hover:text-white hover:underline inline-flex items-center gap-1"
+                                    >
+                                      <span>Direct Apply / ATS</span>
+                                      <ExternalLink className="w-3 h-3" />
+                                    </a>
+                                  )}
+                                  {job.company_website && (
+                                    <a
+                                      href={job.company_website}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-slate-400 hover:text-slate-200 hover:underline inline-flex items-center gap-1"
+                                    >
+                                      <span>Website</span>
+                                      <ExternalLink className="w-3 h-3" />
+                                    </a>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-3 shrink-0">
+                                <div className="text-right font-mono tabular-nums">
+                                  <div className="text-sm font-bold text-emerald-400">
+                                    {job.evaluation?.score}/100
+                                  </div>
+                                  <div className="text-[11px] text-slate-500">QUALIFIED</div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setFocusJobId(job.id);
+                                    setActiveSection('jobs');
+                                  }}
+                                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-medium text-white rounded-lg whitespace-nowrap shrink-0"
+                                >
+                                  View Breakdown
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     {/* Right 4 Cols: Idempotent Qualified-Job Notifications */}
@@ -612,39 +1030,87 @@ export default function App() {
                         <span className="text-xs text-slate-400 font-mono">Telegram / App</span>
                       </div>
 
-                      <div className="divide-y divide-slate-800/80 max-h-96 overflow-y-auto">
-                        {alerts.map((al) => (
-                          <div key={al.id} className="p-4 space-y-1.5 text-xs">
-                            <div className="flex items-start justify-between gap-2">
-                              <span className="font-semibold text-white leading-snug">
-                                {al.title}
-                              </span>
-                              <span className="font-mono text-[10px] text-indigo-400 shrink-0">
-                                {al.delivery_channel}
-                              </span>
-                            </div>
-                            <p className="text-slate-400 leading-relaxed">{al.message}</p>
-                            <div className="flex items-center justify-between pt-1 text-[11px] text-slate-500 font-mono tabular-nums">
-                              <span>{al.created_at.slice(0, 16).replace('T', ' ')}</span>
-                              {al.read_at ? (
-                                <span className="text-emerald-400 flex items-center gap-1">
-                                  <Check className="w-3 h-3" /> Read
+                      {alerts.length === 0 ? (
+                        <div className="p-6 text-center space-y-2">
+                          <Bell className="w-6 h-6 text-slate-600 mx-auto" />
+                          <p className="text-xs text-slate-500 leading-relaxed">
+                            Alerts fire once per qualified job (idempotent). No notifications yet —
+                            qualified matches will appear here automatically.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="divide-y divide-slate-800/80 max-h-96 overflow-y-auto">
+                          {alerts.map((al) => (
+                            <div key={al.id} className="p-4 space-y-1.5 text-xs">
+                              <div className="flex items-start justify-between gap-2">
+                                <span className="font-semibold text-white leading-snug">
+                                  {al.title}
                                 </span>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => handleMarkAlertRead(al.id)}
-                                  className="text-indigo-400 hover:underline font-sans"
-                                >
-                                  Acknowledge
-                                </button>
-                              )}
+                                <span className="font-mono text-[10px] text-indigo-400 shrink-0">
+                                  {al.delivery_channel}
+                                </span>
+                              </div>
+                              <p className="text-slate-400 leading-relaxed">{al.message}</p>
+                              <div className="flex items-center justify-between pt-1 text-[11px] text-slate-500 font-mono tabular-nums">
+                                <span>{relativeTime(al.created_at)}</span>
+                                {al.read_at ? (
+                                  <span className="text-emerald-400 flex items-center gap-1">
+                                    <Check className="w-3 h-3" /> Read
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleMarkAlertRead(al.id).catch((err) =>
+                                        setBanner({ tone: 'error', text: err.message })
+                                      )
+                                    }
+                                    className="text-indigo-400 hover:underline font-sans"
+                                  >
+                                    Acknowledge
+                                  </button>
+                                )}
+                              </div>
                             </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Latest Agent Activity Strip */}
+                  {agentRuns.length > 0 && (
+                    <div className="rounded-xl bg-slate-900/60 border border-slate-800 p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <h2 className="text-sm font-semibold text-white">Latest Agent Activity</h2>
+                        <button
+                          type="button"
+                          onClick={() => setActiveSection('agents')}
+                          className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                        >
+                          Full Audit Log <ArrowRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {agentRuns.slice(0, 6).map((run) => (
+                          <div
+                            key={run.id}
+                            className="px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-[11px] flex items-center gap-2"
+                          >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full ${
+                                run.status === 'COMPLETED' ? 'bg-emerald-500' : 'bg-rose-500'
+                              }`}
+                            />
+                            <span className="font-medium text-slate-200">{run.agent_name}</span>
+                            <span className="text-slate-500 font-mono tabular-nums">
+                              {relativeTime(run.created_at)}
+                            </span>
                           </div>
                         ))}
                       </div>
                     </div>
-                  </div>
+                  )}
                 </div>
               )}
 
@@ -652,6 +1118,8 @@ export default function App() {
               {activeSection === 'jobs' && (
                 <JobsAndEvaluatorView
                   jobs={jobs}
+                  focusJobId={focusJobId}
+                  onFocusJobConsumed={() => setFocusJobId(null)}
                   onRefreshJobs={handlePollLiveAts}
                   onEvaluateJob={handleEvaluateJob}
                   onSaveJobToPipeline={handleSaveJobToPipeline}
@@ -674,6 +1142,8 @@ export default function App() {
               {/* 4. PIPELINE & OUTREACH */}
               {activeSection === 'pipeline' && (
                 <PipelineAndContactsView
+                  subView={pipelineSubview}
+                  onSubViewChange={setPipelineSubview}
                   applications={applications}
                   contacts={contacts}
                   drafts={drafts}
@@ -684,14 +1154,16 @@ export default function App() {
                     await handleTriggerAgent('contact-finder');
                   }}
                   onCreateDraft={async (contactId, jobId) => {
-                    await fetch('/api/v1/outreach/drafts', {
+                    const res = await fetch('/api/v1/outreach/drafts', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ contact_id: contactId, job_id: jobId }),
                     });
+                    if (!res.ok) throw new Error(await extractApiError(res, 'Draft creation failed'));
                     await loadAllCrmData();
                   }}
                   onUpdateDraft={handleUpdateDraft}
+                  onDiscardDraft={handleDiscardDraft}
                   onApproveDraft={handleApproveDraft}
                   onSendDraft={handleSendDraft}
                 />
@@ -710,6 +1182,8 @@ export default function App() {
                   onDeleteSkill={handleDeleteSkill}
                   onTriggerAgent={handleTriggerAgent}
                   onCheckSource={handleCheckSource}
+                  onParseResume={handleParseResume}
+                  onApplyResume={handleApplyResume}
                 />
               )}
 
@@ -726,6 +1200,8 @@ export default function App() {
                   onDeleteSkill={handleDeleteSkill}
                   onTriggerAgent={handleTriggerAgent}
                   onCheckSource={handleCheckSource}
+                  onParseResume={handleParseResume}
+                  onApplyResume={handleApplyResume}
                 />
               )}
             </>

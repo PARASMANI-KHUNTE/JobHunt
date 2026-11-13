@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, RefreshCw, ExternalLink, Search } from 'lucide-react';
+import { Plus, RefreshCw, ExternalLink, Search, Building2, Loader2 } from 'lucide-react';
 
 interface CompaniesAndFundingProps {
   companies: any[];
@@ -18,7 +18,9 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
   const [stageFilter, setStageFilter] = useState('ALL');
   const [showAddForm, setShowAddForm] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [investigatingId, setInvestigatingId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Add company form state
   const [name, setName] = useState('');
@@ -46,11 +48,12 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
   const handleSubmitCompany = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
-      setFeedback('Error: Company name is required.');
+      setErrorMsg('Error: Company name is required.');
       return;
     }
     setBusy(true);
     setFeedback(null);
+    setErrorMsg(null);
     try {
       await onAddCompany({
         name: name.trim(),
@@ -68,9 +71,11 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
       setCareerPage('');
       setHeadquarters('');
       setShowAddForm(false);
-      setFeedback('Company added & deduplicated by canonical domain.');
+      setFeedback(
+        'Company registered & deduplicated by canonical domain. Run Investigate next to register its ATS source.'
+      );
     } catch (err: any) {
-      setFeedback(`Error: ${err.message}`);
+      setErrorMsg(`Error: ${err.message}`);
     } finally {
       setBusy(false);
     }
@@ -79,11 +84,32 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
   const handleScout = async () => {
     setBusy(true);
     setFeedback(null);
+    setErrorMsg(null);
     try {
       await onRunFundingScout();
-      setFeedback('Funding Scout completed: new funded startups imported with source evidence.');
+      setFeedback(
+        'Funding Scout run executed. It imports the companies passed in its payload — register target companies manually for deterministic, evidence-backed data.'
+      );
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Funding Scout run failed.');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleInvestigate = async (companyId: string, companyName: string) => {
+    setInvestigatingId(companyId);
+    setFeedback(null);
+    setErrorMsg(null);
+    try {
+      await onInvestigateCompany(companyId);
+      setFeedback(
+        `Investigated ${companyName}: website verified, career page & ATS provider detected, ATS source registered.`
+      );
+    } catch (err: any) {
+      setErrorMsg(err.message || `Investigation of ${companyName} failed.`);
+    } finally {
+      setInvestigatingId(null);
     }
   };
 
@@ -143,6 +169,15 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
           </button>
         </div>
       </div>
+
+      {errorMsg && (
+        <div className="px-4 py-2.5 rounded-lg bg-rose-950/30 border border-rose-800 text-xs text-rose-300 flex items-center justify-between">
+          <span>{errorMsg}</span>
+          <button type="button" onClick={() => setErrorMsg(null)} className="text-rose-200">
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {feedback && (
         <div className="px-4 py-2.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-emerald-400 flex items-center justify-between">
@@ -287,7 +322,25 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/70 text-xs">
-              {filtered.map((comp) => {
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-10 text-center space-y-2">
+                    <Building2 className="w-8 h-8 text-slate-600 mx-auto" />
+                    <p className="text-sm text-slate-300">
+                      {companies.length === 0
+                        ? 'No companies registered yet.'
+                        : 'No companies match the active filters.'}
+                    </p>
+                    {companies.length === 0 && (
+                      <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                        Register your first target company manually — the canonical domain
+                        deduplication and priority scoring activate on save.
+                      </p>
+                    )}
+                  </td>
+                </tr>
+              ) : (
+                filtered.map((comp) => {
                 const rf = comp.latest_funding;
                 const pb = comp.metadata?.priority_breakdown;
                 const careerUrl = comp.career_page || comp.metadata?.career_page;
@@ -396,20 +449,20 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
                     <td className="py-3.5 px-4 text-right">
                       <button
                         type="button"
-                        onClick={async () => {
-                          setBusy(true);
-                          await onInvestigateCompany(comp.id);
-                          setFeedback(`Re-investigated ${comp.name} and verified ATS endpoint.`);
-                          setBusy(false);
-                        }}
-                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs font-medium whitespace-nowrap shrink-0"
+                        disabled={investigatingId === comp.id}
+                        onClick={() => handleInvestigate(comp.id, comp.name)}
+                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 rounded text-xs font-medium whitespace-nowrap shrink-0 inline-flex items-center gap-1.5"
                       >
-                        Investigate
+                        {investigatingId === comp.id && (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        )}
+                        <span>{investigatingId === comp.id ? 'Investigating...' : 'Investigate'}</span>
                       </button>
                     </td>
                   </tr>
                 );
-              })}
+                })
+              )}
             </tbody>
           </table>
         </div>

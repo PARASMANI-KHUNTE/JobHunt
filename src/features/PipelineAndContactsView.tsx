@@ -1,7 +1,20 @@
 import React, { useState } from 'react';
-import { Check, Send, RefreshCw, ExternalLink, AlertTriangle, Plus, Mail } from 'lucide-react';
+import {
+  Check,
+  Send,
+  RefreshCw,
+  ExternalLink,
+  AlertTriangle,
+  Plus,
+  Mail,
+  Kanban,
+  Ban,
+} from 'lucide-react';
+import { statusTone } from '../lib/ui.ts';
 
 interface PipelineAndContactsProps {
+  subView: 'pipeline' | 'outreach';
+  onSubViewChange: (view: 'pipeline' | 'outreach') => void;
   applications: any[];
   contacts: any[];
   drafts: any[];
@@ -11,6 +24,7 @@ interface PipelineAndContactsProps {
   onResearchContacts: () => Promise<void>;
   onCreateDraft: (contactId: string, jobId: string) => Promise<void>;
   onUpdateDraft: (draftId: string, subject: string, body: string) => Promise<void>;
+  onDiscardDraft: (draftId: string) => Promise<void>;
   onApproveDraft: (draftId: string) => Promise<void>;
   onSendDraft: (draftId: string) => Promise<any>;
 }
@@ -29,6 +43,8 @@ const APPLICATION_STATUSES = [
 ];
 
 export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
+  subView,
+  onSubViewChange,
   applications,
   contacts,
   drafts,
@@ -38,16 +54,18 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
   onResearchContacts,
   onCreateDraft,
   onUpdateDraft,
+  onDiscardDraft,
   onApproveDraft,
   onSendDraft,
 }) => {
-  const [subView, setSubView] = useState<'pipeline' | 'outreach'>('pipeline');
   const [selectedAppId, setSelectedAppId] = useState<string | null>(applications[0]?.id || null);
   const [selectedDraftId, setSelectedDraftId] = useState<string | null>(drafts[0]?.id || null);
+  const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [statusNote, setStatusNote] = useState('');
   const [feedback, setFeedback] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [creatingDraftFor, setCreatingDraftFor] = useState<string | null>(null);
 
   // Draft editing local state
   const selectedDraft =
@@ -113,6 +131,34 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
     }
   };
 
+  const handleDiscard = async (draftId: string) => {
+    setBusy(true);
+    setFeedback(null);
+    setErrorMsg(null);
+    try {
+      await onDiscardDraft(draftId);
+      setFeedback('Draft discarded and removed from the active approval queue.');
+    } catch (err: any) {
+      setErrorMsg(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCreateDraftForContact = async (contactId: string, jobId: string) => {
+    setCreatingDraftFor(contactId);
+    setFeedback(null);
+    setErrorMsg(null);
+    try {
+      await onCreateDraft(contactId, jobId);
+      setFeedback('Generated personalized draft for contact (PENDING_APPROVAL).');
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Draft generation failed.');
+    } finally {
+      setCreatingDraftFor(null);
+    }
+  };
+
   const handleSend = async (draftId: string) => {
     setBusy(true);
     setFeedback(null);
@@ -152,7 +198,7 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
         <div className="flex items-center gap-1 p-1 bg-slate-900 border border-slate-800 rounded-lg w-fit">
           <button
             type="button"
-            onClick={() => setSubView('pipeline')}
+            onClick={() => onSubViewChange('pipeline')}
             className={`px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
               subView === 'pipeline'
                 ? 'bg-slate-800 text-white'
@@ -163,7 +209,7 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
           </button>
           <button
             type="button"
-            onClick={() => setSubView('outreach')}
+            onClick={() => onSubViewChange('outreach')}
             className={`px-3.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
               subView === 'outreach'
                 ? 'bg-slate-800 text-white'
@@ -180,9 +226,18 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
             disabled={busy}
             onClick={async () => {
               setBusy(true);
-              await onResearchContacts();
-              setFeedback('Contact Finder scanned public company directories for recruiter contacts.');
-              setBusy(false);
+              setFeedback(null);
+              setErrorMsg(null);
+              try {
+                await onResearchContacts();
+                setFeedback(
+                  'Contact Finder scanned public company directories for recruiter contacts.'
+                );
+              } catch (err: any) {
+                setErrorMsg(err.message || 'Contact Finder run failed.');
+              } finally {
+                setBusy(false);
+              }
             }}
             className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 text-xs font-medium rounded-lg flex items-center gap-1.5 whitespace-nowrap shrink-0"
           >
@@ -212,83 +267,133 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
 
       {/* Subview 1: Application Lifecycle CRM & Audit History */}
       {subView === 'pipeline' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Left 7 Cols: Tracked Applications */}
-          <div className="lg:col-span-7 bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden">
-            <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-white">
-                Tracked Opportunity Lifecycle ({applications.length})
-              </h2>
-              <span className="text-xs text-slate-400">Manual Application Control</span>
-            </div>
-
-            <div className="divide-y divide-slate-800/80">
-              {applications.map((app) => {
-                const isSelected = selectedApp?.id === app.id;
-                return (
-                  <div
-                    key={app.id}
-                    onClick={() => setSelectedAppId(app.id)}
-                    className={`p-4 cursor-pointer transition-colors ${
-                      isSelected ? 'bg-slate-800/70' : 'hover:bg-slate-800/30'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="space-y-1">
-                        <h3 className="text-sm font-semibold text-white">{app.job_title}</h3>
-                        <div className="text-xs text-slate-400 flex flex-wrap items-center gap-1.5">
-                          <span className="text-slate-200 font-medium">{app.company_name}</span>
-                          <span aria-hidden="true">·</span>
-                          <span>{app.work_mode}</span>
-                          <span aria-hidden="true">·</span>
-                          <span className="font-mono tabular-nums">
-                            Match Score: {app.score ?? 90}/100
-                          </span>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-3 text-xs pt-0.5">
-                          {app.company_career_page && (
-                            <a
-                              href={app.company_career_page}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              className="text-indigo-400 hover:underline inline-flex items-center gap-1 font-medium"
-                            >
-                              <span>Careers Page</span>
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
-                          )}
-                          {app.job_apply_url && (
-                            <a
-                              href={app.job_apply_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              className="text-emerald-400 hover:underline inline-flex items-center gap-1"
-                            >
-                              <span>Application Portal</span>
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
-                          )}
-                        </div>
-                        {app.follow_up_at && (
-                          <p className="text-[11px] text-slate-500 font-mono tabular-nums">
-                            Follow-up scheduled: {app.follow_up_at.slice(0, 10)}
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="text-right shrink-0">
-                        <span className="text-xs font-mono font-semibold text-indigo-400">
-                          {app.status}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+        <div className="space-y-4">
+          {/* Lifecycle Status Filter */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setStatusFilter('ALL')}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-mono transition-colors ${
+                statusFilter === 'ALL'
+                  ? 'bg-slate-800 text-white font-semibold'
+                  : 'bg-slate-950 text-slate-400 border border-slate-800 hover:text-slate-200'
+              }`}
+            >
+              ALL ({applications.length})
+            </button>
+            {APPLICATION_STATUSES.filter(
+              (st) => applications.filter((a) => a.status === st).length > 0
+            ).map((st) => {
+              const count = applications.filter((a) => a.status === st).length;
+              return (
+                <button
+                  key={st}
+                  type="button"
+                  onClick={() => setStatusFilter(st)}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-mono transition-colors ${
+                    statusFilter === st
+                      ? 'bg-slate-800 text-white font-semibold'
+                      : 'bg-slate-950 text-slate-400 border border-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  {st} ({count})
+                </button>
+              );
+            })}
           </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            {/* Left 7 Cols: Tracked Applications */}
+            <div className="lg:col-span-7 bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-white">
+                  Tracked Opportunity Lifecycle ({applications.length})
+                </h2>
+                <span className="text-xs text-slate-400">Manual Application Control</span>
+              </div>
+
+              {applications.length === 0 ? (
+                <div className="p-8 text-center space-y-3">
+                  <Kanban className="w-8 h-8 text-slate-600 mx-auto" />
+                  <p className="text-sm text-slate-300">No applications tracked yet.</p>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto leading-relaxed">
+                    Save qualified matches from the Jobs & Evaluator view to start tracking them
+                    through your application lifecycle.
+                  </p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-800/80">
+                  {applications
+                    .filter((app) => statusFilter === 'ALL' || app.status === statusFilter)
+                    .map((app) => {
+                      const isSelected = selectedApp?.id === app.id;
+                      return (
+                        <div
+                          key={app.id}
+                          onClick={() => setSelectedAppId(app.id)}
+                          className={`p-4 cursor-pointer transition-colors ${
+                            isSelected ? 'bg-slate-800/70' : 'hover:bg-slate-800/30'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="space-y-1">
+                              <h3 className="text-sm font-semibold text-white">{app.job_title}</h3>
+                              <div className="text-xs text-slate-400 flex flex-wrap items-center gap-1.5">
+                                <span className="text-slate-200 font-medium">{app.company_name}</span>
+                                <span aria-hidden="true">·</span>
+                                <span>{app.work_mode}</span>
+                                <span aria-hidden="true">·</span>
+                                <span className="font-mono tabular-nums">
+                                  Match Score: {app.score ?? '—'}/100
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-3 text-xs pt-0.5">
+                                {app.company_career_page && (
+                                  <a
+                                    href={app.company_career_page}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="text-indigo-400 hover:underline inline-flex items-center gap-1 font-medium"
+                                  >
+                                    <span>Careers Page</span>
+                                    <ExternalLink className="w-3 h-3" />
+                                  </a>
+                                )}
+                                {app.job_apply_url && (
+                                  <a
+                                    href={app.job_apply_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="text-emerald-400 hover:underline inline-flex items-center gap-1"
+                                  >
+                                    <span>Application Portal</span>
+                                    <ExternalLink className="w-3 h-3" />
+                                  </a>
+                                )}
+                              </div>
+                              {app.follow_up_at && (
+                                <p className="text-[11px] text-slate-500 font-mono tabular-nums">
+                                  Follow-up scheduled: {app.follow_up_at.slice(0, 10)}
+                                </p>
+                              )}
+                            </div>
+
+                            <div className="text-right shrink-0">
+                              <span
+                                className={`text-[11px] font-mono font-semibold px-2 py-0.5 rounded border ${statusTone(app.status)}`}
+                              >
+                                {app.status}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
 
           {/* Right 5 Cols: Status Transition & Immutable Event History */}
           <div className="lg:col-span-5 bg-slate-900/60 border border-slate-800 rounded-xl p-5 space-y-5">
@@ -401,6 +506,7 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
               <p className="text-xs text-slate-400">No applications tracked yet.</p>
             )}
           </div>
+          </div>
         </div>
       )}
 
@@ -485,15 +591,15 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                           {companyJob && (
                             <button
                               type="button"
-                              onClick={async () => {
-                                setBusy(true);
-                                await onCreateDraft(ct.id, companyJob.id);
-                                setFeedback(`Generated personalized draft for ${ct.name} (PENDING_APPROVAL).`);
-                                setBusy(false);
-                              }}
-                              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs font-medium inline-flex items-center gap-1 whitespace-nowrap shrink-0"
+                              disabled={busy || creatingDraftFor === ct.id}
+                              onClick={() => handleCreateDraftForContact(ct.id, companyJob.id)}
+                              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 rounded text-xs font-medium inline-flex items-center gap-1 whitespace-nowrap shrink-0"
                             >
-                              <Plus className="w-3 h-3" />
+                              {creatingDraftFor === ct.id ? (
+                                <RefreshCw className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <Plus className="w-3 h-3" />
+                              )}
                               <span>Generate Draft</span>
                             </button>
                           )}
@@ -538,6 +644,8 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                               ? 'text-emerald-400'
                               : dr.status === 'APPROVED'
                               ? 'text-cyan-400'
+                              : dr.status === 'DISCARDED'
+                              ? 'text-slate-600'
                               : 'text-amber-400'
                           }`}
                         >
@@ -641,6 +749,49 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
 
                   {/* Two-Step Safety Action Bar + Real Mail Client & Gmail Actions */}
                   <div className="space-y-3 pt-2 border-t border-slate-800">
+                    {/* Draft Lifecycle Stepper */}
+                    <div className="flex items-center gap-2">
+                      {(['PENDING_APPROVAL', 'APPROVED', 'SENT'] as const).map((stage, idx) => {
+                        const stageIndex =
+                          selectedDraft.status === 'PENDING_APPROVAL'
+                            ? 0
+                            : selectedDraft.status === 'APPROVED'
+                            ? 1
+                            : selectedDraft.status === 'SENT'
+                            ? 2
+                            : -1;
+                        const done = stageIndex >= idx && stageIndex !== -1;
+                        return (
+                          <React.Fragment key={stage}>
+                            {idx > 0 && (
+                              <div
+                                className={`h-px flex-1 min-w-3 ${done ? 'bg-slate-600' : 'bg-slate-800'}`}
+                              />
+                            )}
+                            <span
+                              className={`flex items-center gap-1 text-[11px] font-mono whitespace-nowrap ${
+                                done ? 'text-slate-200' : 'text-slate-600'
+                              }`}
+                            >
+                              <span
+                                className={`w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold ${
+                                  done ? 'bg-slate-700 text-white' : 'bg-slate-900 text-slate-600'
+                                }`}
+                              >
+                                {idx + 1}
+                              </span>
+                              {stage.replace('_', ' ')}
+                            </span>
+                          </React.Fragment>
+                        );
+                      })}
+                      {selectedDraft.status === 'DISCARDED' && (
+                        <span className="ml-auto text-[11px] font-mono text-slate-600">
+                          DISCARDED
+                        </span>
+                      )}
+                    </div>
+
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
                         <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
@@ -656,13 +807,30 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                             disabled={busy}
                             onClick={async () => {
                               setBusy(true);
-                              await onUpdateDraft(selectedDraft.id, editSubject, editBody);
-                              setFeedback('Saved edits to outreach draft.');
-                              setBusy(false);
+                              try {
+                                await onUpdateDraft(selectedDraft.id, editSubject, editBody);
+                                setFeedback('Saved edits to outreach draft.');
+                              } catch (err: any) {
+                                setErrorMsg(err.message || 'Draft save failed.');
+                              } finally {
+                                setBusy(false);
+                              }
                             }}
                             className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg whitespace-nowrap shrink-0"
                           >
                             Save Edits
+                          </button>
+                        )}
+
+                        {selectedDraft.status !== 'SENT' && (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleDiscard(selectedDraft.id)}
+                            className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-rose-300 text-xs font-medium rounded-lg inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                          >
+                            <Ban className="w-3.5 h-3.5" />
+                            <span>Discard</span>
                           </button>
                         )}
 

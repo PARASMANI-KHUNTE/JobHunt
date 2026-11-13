@@ -4,6 +4,8 @@ import {
   UserRecord,
   CandidateProfileRecord,
   CandidateSkillRecord,
+  ResumeWorkExperienceRecord,
+  ResumeEducationRecord,
   CompanyRecord,
   FundingRoundRecord,
   CompanySignalRecord,
@@ -142,7 +144,7 @@ export class JobHuntStore {
 
   public updateProfile(
     userId: string,
-    updates: Partial<Pick<CandidateProfileRecord, 'full_name' | 'headline' | 'summary' | 'experience_years' | 'resume_url' | 'resume_text' | 'preferences'>>
+    updates: Partial<Pick<CandidateProfileRecord, 'full_name' | 'headline' | 'summary' | 'experience_years' | 'resume_url' | 'resume_text' | 'preferences' | 'work_experience' | 'education'>>
   ): CandidateProfileRecord {
     const existing = this.getProfile(userId);
     const updated: CandidateProfileRecord = {
@@ -203,6 +205,82 @@ export class JobHuntStore {
       return false;
     }
     return this.skills.delete(skillId);
+  }
+
+  // ==========================================================================
+  // Resume Import: apply reviewed parser output to the candidate profile.
+  // Single profile_version increment, then one re-evaluation sweep.
+  // ==========================================================================
+
+  public applyResumeProfile(payload: {
+    full_name?: string;
+    headline?: string;
+    summary?: string;
+    experience_years?: number;
+    resume_text?: string;
+    work_experience?: ResumeWorkExperienceRecord[];
+    education?: ResumeEducationRecord[];
+    skills?: Array<{
+      skill_name: string;
+      proficiency?: CandidateSkillRecord['proficiency'];
+      years_experience?: number;
+    }>;
+  }): {
+    profile: CandidateProfileRecord;
+    skills: CandidateSkillRecord[];
+    skills_added: number;
+    skills_skipped: number;
+  } {
+    const existing = this.getProfile(this.defaultUserId);
+
+    const updated = this.updateProfile(this.defaultUserId, {
+      ...(payload.full_name !== undefined && String(payload.full_name).trim()
+        ? { full_name: String(payload.full_name).trim() }
+        : {}),
+      ...(payload.headline !== undefined ? { headline: String(payload.headline).trim() } : {}),
+      ...(payload.summary !== undefined ? { summary: String(payload.summary) } : {}),
+      ...(payload.experience_years !== undefined
+        ? { experience_years: Math.max(0, Number(payload.experience_years) || 0) }
+        : {}),
+      ...(payload.resume_text !== undefined ? { resume_text: String(payload.resume_text) } : {}),
+      ...(payload.work_experience !== undefined ? { work_experience: payload.work_experience } : {}),
+      ...(payload.education !== undefined ? { education: payload.education } : {}),
+    });
+    void existing;
+
+    let skillsAdded = 0;
+    let skillsSkipped = 0;
+    for (const skill of payload.skills || []) {
+      try {
+        this.addCandidateSkill(
+          updated.id,
+          String(skill.skill_name),
+          skill.proficiency || 'INTERMEDIATE',
+          skill.years_experience !== undefined ? Number(skill.years_experience) : 1.0
+        );
+        skillsAdded++;
+      } catch (err: any) {
+        if (String(err?.message || '').includes('UNIQUE_VIOLATION')) {
+          skillsSkipped++;
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    // One re-evaluation sweep after all skills are imported
+    for (const job of this.jobs.values()) {
+      if (job.status === 'ACTIVE') {
+        this.evaluateAndPersistJob(job.id, updated.id);
+      }
+    }
+
+    return {
+      profile: updated,
+      skills: this.getSkills(updated.id),
+      skills_added: skillsAdded,
+      skills_skipped: skillsSkipped,
+    };
   }
 
   // ==========================================================================

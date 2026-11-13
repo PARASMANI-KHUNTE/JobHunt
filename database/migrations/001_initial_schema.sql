@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS candidate_profiles (
   experience_years NUMERIC(4, 1) DEFAULT 0,
   resume_url TEXT,
   resume_text TEXT,
+  work_experience JSONB,
+  education JSONB,
   preferences JSONB NOT NULL DEFAULT '{}'::jsonb,
   profile_version INTEGER NOT NULL DEFAULT 1,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

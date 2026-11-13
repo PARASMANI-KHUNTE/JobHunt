@@ -1,8 +1,14 @@
-import React, { useState } from 'react';
-import { Search, RefreshCw, ExternalLink, Check, AlertCircle, Plus } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Search, RefreshCw, ExternalLink, Check, AlertCircle, Plus, Briefcase, ArrowUpDown } from 'lucide-react';
+import { decisionTone, formatSalary } from '../lib/ui.ts';
+
+type SortMode = 'score' | 'newest' | 'priority';
 
 interface JobsAndEvaluatorProps {
   jobs: any[];
+  /** Cross-section deep link: select & reveal this job when set. */
+  focusJobId?: string | null;
+  onFocusJobConsumed?: () => void;
   onRefreshJobs: () => Promise<void>;
   onEvaluateJob: (jobId: string) => Promise<void>;
   onSaveJobToPipeline: (jobId: string) => Promise<void>;
@@ -11,6 +17,8 @@ interface JobsAndEvaluatorProps {
 
 export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
   jobs,
+  focusJobId = null,
+  onFocusJobConsumed,
   onRefreshJobs,
   onEvaluateJob,
   onSaveJobToPipeline,
@@ -19,23 +27,46 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
   const [decisionFilter, setDecisionFilter] = useState<string>('ALL');
   const [workModeFilter, setWorkModeFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [sortMode, setSortMode] = useState<SortMode>('score');
   const [selectedJobId, setSelectedJobId] = useState<string | null>(jobs[0]?.id || null);
   const [busyJobId, setBusyJobId] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  const filteredJobs = jobs.filter((job) => {
-    const decision = job.evaluation?.decision || 'REVIEW';
-    if (decisionFilter !== 'ALL' && decision !== decisionFilter) return false;
-    if (workModeFilter !== 'ALL' && job.work_mode !== workModeFilter) return false;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const matchTitle = job.title.toLowerCase().includes(q);
-      const matchCompany = (job.company_name || '').toLowerCase().includes(q);
-      const matchDesc = (job.description || '').toLowerCase().includes(q);
-      if (!matchTitle && !matchCompany && !matchDesc) return false;
+  // Consume cross-section focus (e.g. "View Breakdown" from Overview)
+  useEffect(() => {
+    if (focusJobId) {
+      setSelectedJobId(focusJobId);
+      onFocusJobConsumed?.();
     }
-    return true;
-  });
+  }, [focusJobId, onFocusJobConsumed]);
+
+  const filteredJobs = jobs
+    .filter((job) => {
+      const decision = job.evaluation?.decision || 'REVIEW';
+      if (decisionFilter !== 'ALL' && decision !== decisionFilter) return false;
+      if (workModeFilter !== 'ALL' && job.work_mode !== workModeFilter) return false;
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchTitle = job.title.toLowerCase().includes(q);
+        const matchCompany = (job.company_name || '').toLowerCase().includes(q);
+        const matchDesc = (job.description || '').toLowerCase().includes(q);
+        if (!matchTitle && !matchCompany && !matchDesc) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      if (sortMode === 'score') {
+        return (b.evaluation?.score ?? 0) - (a.evaluation?.score ?? 0);
+      }
+      if (sortMode === 'newest') {
+        return (
+          new Date(b.posted_at || b.first_seen_at || 0).getTime() -
+          new Date(a.posted_at || a.first_seen_at || 0).getTime()
+        );
+      }
+      return (b.company_priority || 0) - (a.company_priority || 0);
+    });
 
   const selectedJob =
     filteredJobs.find((j) => j.id === selectedJobId) ||
@@ -43,24 +74,15 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
     filteredJobs[0] ||
     null;
 
-  const formatSalary = (job: any) => {
-    if (job.salary_min === null && job.salary_max === null) {
-      return 'Undisclosed (Null preserved)';
-    }
-    const curr = job.salary_currency || 'INR';
-    const min = job.salary_min ? Number(job.salary_min).toLocaleString() : '0';
-    const max = job.salary_max ? Number(job.salary_max).toLocaleString() : min;
-    return `${curr} ${min} – ${max}`;
-  };
-
   const handleSave = async (jobId: string) => {
     setBusyJobId(jobId);
     setActionFeedback(null);
+    setActionError(null);
     try {
       await onSaveJobToPipeline(jobId);
       setActionFeedback('Opportunity saved to Application CRM pipeline.');
     } catch (err: any) {
-      setActionFeedback(err.message || 'Could not save job.');
+      setActionError(err.message || 'Could not save job.');
     } finally {
       setBusyJobId(null);
     }
@@ -69,11 +91,23 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
   const handleEvaluate = async (jobId: string) => {
     setBusyJobId(jobId);
     setActionFeedback(null);
+    setActionError(null);
     try {
       await onEvaluateJob(jobId);
       setActionFeedback('Job re-evaluated against current candidate profile version.');
+    } catch (err: any) {
+      setActionError(err.message || 'Re-evaluation failed.');
     } finally {
       setBusyJobId(null);
+    }
+  };
+
+  const handleDraft = async (jobId: string, companyId: string) => {
+    setActionError(null);
+    try {
+      await onCreateDraftForJob(jobId, companyId);
+    } catch (err: any) {
+      setActionError(err.message || 'Could not create outreach draft.');
     }
   };
 
@@ -116,6 +150,30 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
               </button>
             ))}
           </div>
+
+          <div className="flex items-center gap-1 p-1 bg-slate-900 border border-slate-800 rounded-lg">
+            <ArrowUpDown className="w-3 h-3 text-slate-500 ml-1.5" />
+            {(
+              [
+                ['score', 'Score'],
+                ['newest', 'Newest'],
+                ['priority', 'Priority'],
+              ] as Array<[SortMode, string]>
+            ).map(([mode, label]) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setSortMode(mode)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  sortMode === mode
+                    ? 'bg-slate-800 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="flex items-center gap-3">
@@ -140,6 +198,19 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
           </button>
         </div>
       </div>
+
+      {actionError && (
+        <div className="px-4 py-2.5 rounded-lg bg-rose-950/30 border border-rose-800 text-xs text-rose-300 flex items-center justify-between">
+          <span>{actionError}</span>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="text-rose-200"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {actionFeedback && (
         <div className="px-4 py-2.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-emerald-400 flex items-center justify-between">
@@ -168,19 +239,31 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
           </div>
 
           {filteredJobs.length === 0 ? (
-            <div className="p-8 text-center space-y-2">
-              <p className="text-sm text-slate-300">No job openings match the active filter.</p>
-              <button
-                type="button"
-                onClick={() => {
-                  setDecisionFilter('ALL');
-                  setWorkModeFilter('ALL');
-                  setSearchQuery('');
-                }}
-                className="px-3 py-1.5 text-xs font-medium bg-slate-800 text-white rounded-md"
-              >
-                Reset Filters
-              </button>
+            <div className="p-8 text-center space-y-3">
+              <Briefcase className="w-8 h-8 text-slate-600 mx-auto" />
+              <p className="text-sm text-slate-300">
+                {jobs.length === 0
+                  ? 'No jobs discovered yet.'
+                  : 'No job openings match the active filters.'}
+              </p>
+              {jobs.length === 0 ? (
+                <p className="text-xs text-slate-500 max-w-sm mx-auto leading-relaxed">
+                  Register companies and investigate them to register ATS sources, then poll live
+                  Greenhouse / Lever / Ashby endpoints to fetch real openings.
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDecisionFilter('ALL');
+                    setWorkModeFilter('ALL');
+                    setSearchQuery('');
+                  }}
+                  className="px-3 py-1.5 text-xs font-medium bg-slate-800 text-white rounded-md"
+                >
+                  Reset Filters
+                </button>
+              )}
             </div>
           ) : (
             <div className="divide-y divide-slate-800/80">
@@ -261,19 +344,13 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
                       </div>
 
                       <div className="text-right shrink-0 space-y-1">
-                        <div className="font-mono tabular-nums text-base font-bold text-white">
+                        <div
+                          className={`font-mono tabular-nums text-base font-bold ${decisionTone(decision)}`}
+                        >
                           {score}
                           <span className="text-xs font-normal text-slate-500">/100</span>
                         </div>
-                        <div
-                          className={`text-xs font-semibold ${
-                            decision === 'QUALIFIED'
-                              ? 'text-emerald-400'
-                              : decision === 'REVIEW'
-                              ? 'text-amber-400'
-                              : 'text-rose-400'
-                          }`}
-                        >
+                        <div className={`text-xs font-semibold ${decisionTone(decision)}`}>
                           {decision}
                         </div>
                       </div>
@@ -301,15 +378,7 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
                     <span className="text-xl font-bold text-white">
                       {selectedJob.evaluation?.score ?? 0}/100
                     </span>
-                    <p
-                      className={`text-xs font-semibold ${
-                        selectedJob.evaluation?.decision === 'QUALIFIED'
-                          ? 'text-emerald-400'
-                          : selectedJob.evaluation?.decision === 'REVIEW'
-                          ? 'text-amber-400'
-                          : 'text-rose-400'
-                      }`}
-                    >
+                    <p className={`text-xs font-semibold ${decisionTone(selectedJob.evaluation?.decision)}`}>
                       {selectedJob.evaluation?.decision || 'UNSCORED'}
                     </p>
                   </div>
@@ -385,7 +454,7 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => onCreateDraftForJob(selectedJob.id, selectedJob.company_id)}
+                    onClick={() => handleDraft(selectedJob.id, selectedJob.company_id)}
                     className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0"
                   >
                     Draft Outreach

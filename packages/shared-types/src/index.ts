@@ -34,9 +34,28 @@ export interface CandidateProfileRecord {
   resume_url: string | null;
   resume_text: string;
   preferences: CandidatePreferences;
+  /** Structured work history extracted from the candidate resume (JSONB). */
+  work_experience?: ResumeWorkExperienceRecord[] | null;
+  /** Structured education history extracted from the candidate resume (JSONB). */
+  education?: ResumeEducationRecord[] | null;
   profile_version: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface ResumeWorkExperienceRecord {
+  company: string | null;
+  title: string | null;
+  start: string | null;
+  end: string | null;
+  current: boolean;
+  duration_years: number;
+}
+
+export interface ResumeEducationRecord {
+  degree: string;
+  institution: string | null;
+  year: string | null;
 }
 
 export interface CandidateSkillRecord {

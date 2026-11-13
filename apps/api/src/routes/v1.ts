@@ -113,6 +113,129 @@ v1Router.post('/profile/resume', (req: Request, res: Response) => {
   res.status(201).json({ data: updated });
 });
 
+// ============================================================================
+// Resume Import: deterministic parse + reviewed apply
+// ============================================================================
+
+const MAX_RESUME_TEXT_CHARS = 80_000;
+const MAX_RESUME_BASE64_CHARS = 10_000_000; // ~7.5MB raw PDF
+
+v1Router.post('/profile/resume/parse', async (req: Request, res: Response) => {
+  try {
+    const { text, filename, content_base64 } = req.body || {};
+    let resumeText = '';
+
+    if (text && typeof text === 'string' && text.trim()) {
+      resumeText = String(text);
+    } else if (content_base64 && typeof content_base64 === 'string') {
+      if (content_base64.length > MAX_RESUME_BASE64_CHARS) {
+        return sendError(res, 413, 'PAYLOAD_TOO_LARGE', 'Resume file exceeds 7.5MB');
+      }
+      const name = String(filename || '').toLowerCase();
+      if (name.endsWith('.pdf') || !name) {
+        let buffer: Buffer;
+        try {
+          buffer = Buffer.from(String(content_base64), 'base64');
+        } catch {
+          return sendError(res, 400, 'VALIDATION_ERROR', 'Invalid base64 resume payload');
+        }
+        if (buffer.length < 100) {
+          return sendError(res, 400, 'VALIDATION_ERROR', 'Resume file is empty or corrupted');
+        }
+        const { extractPdfText } = await import('../services/pdfExtractor.ts');
+        resumeText = await extractPdfText(buffer);
+      } else if (name.endsWith('.txt') || name.endsWith('.md')) {
+        try {
+          resumeText = Buffer.from(String(content_base64), 'base64').toString('utf8');
+        } catch {
+          return sendError(res, 400, 'VALIDATION_ERROR', 'Invalid base64 resume payload');
+        }
+      } else {
+        return sendError(
+          res,
+          415,
+          'UNSUPPORTED_FORMAT',
+          'Unsupported resume format. Use PDF, TXT, or MD — or paste the resume text directly.'
+        );
+      }
+    } else {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'Provide resume text or a base64 file payload');
+    }
+
+    resumeText = resumeText.slice(0, MAX_RESUME_TEXT_CHARS);
+    if (!resumeText.trim()) {
+      return sendError(res, 422, 'EMPTY_RESUME', 'No readable text found in the provided resume');
+    }
+
+    const { parseResumeText } = await import('../services/resumeParser.ts');
+    const parsed = parseResumeText(resumeText);
+
+    res.json({
+      data: {
+        parsed,
+        resume_text: resumeText,
+        filename: filename || null,
+      },
+    });
+  } catch (err: any) {
+    const message = String(err?.message || 'Resume parsing failed');
+    sendError(res, 422, 'RESUME_PARSE_ERROR', message);
+  }
+});
+
+v1Router.post('/profile/resume/apply', (req: Request, res: Response) => {
+  try {
+    const {
+      full_name,
+      headline,
+      summary,
+      experience_years,
+      resume_text,
+      work_experience,
+      education,
+      skills,
+    } = req.body || {};
+
+    if (!resume_text || !String(resume_text).trim()) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'resume_text is required to import a resume');
+    }
+    if (skills !== undefined && !Array.isArray(skills)) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'skills must be an array');
+    }
+    if (experience_years !== undefined && (Number.isNaN(Number(experience_years)) || Number(experience_years) < 0)) {
+      return sendError(res, 400, 'VALIDATION_ERROR', 'experience_years must be a non-negative number');
+    }
+
+    const result = dbStore.applyResumeProfile({
+      full_name,
+      headline,
+      summary,
+      experience_years: experience_years !== undefined ? Number(experience_years) : undefined,
+      resume_text: String(resume_text).slice(0, MAX_RESUME_TEXT_CHARS),
+      work_experience: Array.isArray(work_experience) ? work_experience : undefined,
+      education: Array.isArray(education) ? education : undefined,
+      skills: Array.isArray(skills)
+        ? skills.map((s: any) => ({
+            skill_name: String(s?.skill_name || '').trim(),
+            proficiency: s?.proficiency,
+            years_experience: s?.years_experience,
+          }))
+        : [],
+    });
+
+    res.json({
+      data: {
+        profile: { ...result.profile, skills: result.skills },
+        skills_added: result.skills_added,
+        skills_skipped: result.skills_skipped,
+      },
+      meta: { profile_version: result.profile.profile_version },
+    });
+  } catch (err: any) {
+    sendError(res, 400, 'RESUME_APPLY_ERROR', err.message);
+  }
+});
+
 v1Router.get('/profile/skills', (_req: Request, res: Response) => {
   const skills = dbStore.getSkills(dbStore.defaultProfileId);
   res.json({ data: skills });

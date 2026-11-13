@@ -9,7 +9,7 @@ export function createApiApp(): Express {
   // Disable the framework fingerprint header
   app.disable('x-powered-by');
 
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: '10mb' }));
 
   // Baseline security headers (dependency-free)
   app.use((_req: Request, res: Response, next: NextFunction) => {
