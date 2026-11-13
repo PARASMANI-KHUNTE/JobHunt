@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { dbStore } from '../database/store.ts';
-import { isSafeExternalUrl } from '../services/coreEngine.ts';
+import { isSafeExternalUrl, getCareerPageUrl } from '../services/coreEngine.ts';
 import { buildMailClientLinks } from '../services/mailer.ts';
 import { ApplicationStatus } from '../../../../packages/contracts/src/index.ts';
 
@@ -314,7 +314,7 @@ v1Router.get('/companies', (req: Request, res: Response) => {
     const sources = Array.from(dbStore.jobSources.values()).filter((s) => s.company_id === c.id);
     return {
       ...c,
-      career_page: (c.metadata?.career_page as string) || (c.website ? `${c.website.replace(/\/$/, '')}/careers` : null),
+      career_page: getCareerPageUrl(c),
       ats_source_url: sources[0]?.source_url || null,
       funding_rounds: funding,
       latest_funding: funding[0] || null,
@@ -336,9 +336,13 @@ v1Router.get('/companies', (req: Request, res: Response) => {
   }
 
   list.sort((a, b) => b.hiring_priority - a.hiring_priority);
+  const page = Math.max(1, Number(req.query.page || 1));
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit || 50)));
+  const total = list.length;
+  const paginated = req.query.page ? list.slice((page - 1) * limit, page * limit) : list;
   res.json({
-    data: list,
-    meta: { total: list.length, page: 1, limit: 50, timestamp: new Date().toISOString() },
+    data: paginated,
+    meta: { total, page, limit, timestamp: new Date().toISOString() },
   });
 });
 
@@ -428,9 +432,7 @@ v1Router.get('/companies/:id', (req: Request, res: Response) => {
   res.json({
     data: {
       ...company,
-      career_page:
-        (company.metadata?.career_page as string) ||
-        (company.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+      career_page: getCareerPageUrl(company),
       funding_rounds: funding,
       signals,
       jobs,
@@ -500,9 +502,7 @@ v1Router.get('/jobs', (req: Request, res: Response) => {
     const existingApp = Array.from(dbStore.applications.values()).find(
       (a) => a.job_id === j.id && a.profile_id === dbStore.defaultProfileId
     );
-    const companyCareerPage =
-      (company?.metadata?.career_page as string) ||
-      (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null);
+    const companyCareerPage = getCareerPageUrl(company);
     return {
       ...j,
       company_name: company?.name || 'Unknown Company',
@@ -539,12 +539,19 @@ v1Router.get('/jobs', (req: Request, res: Response) => {
 
   enrichedJobs.sort((a, b) => (b.evaluation?.score ?? 0) - (a.evaluation?.score ?? 0));
 
+  const page = Math.max(1, Number(req.query.page || 1));
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit || 50)));
+  const total = enrichedJobs.length;
+  const paginatedJobs = req.query.page
+    ? enrichedJobs.slice((page - 1) * limit, page * limit)
+    : enrichedJobs;
+
   res.json({
-    data: enrichedJobs,
+    data: paginatedJobs,
     meta: {
-      total: enrichedJobs.length,
-      page: Number(req.query.page || 1),
-      limit: Number(req.query.limit || 20),
+      total,
+      page,
+      limit,
       timestamp: new Date().toISOString(),
     },
   });
@@ -560,9 +567,7 @@ v1Router.get('/jobs/recent', (_req: Request, res: Response) => {
         ...j,
         company_name: company?.name || 'Company',
         company_website: company?.website || null,
-        company_career_page:
-          (company?.metadata?.career_page as string) ||
-          (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+        company_career_page: getCareerPageUrl(company),
         evaluation: dbStore.getLatestEvaluationForJob(j.id),
       };
     });
@@ -595,9 +600,7 @@ v1Router.get('/jobs/:id', (req: Request, res: Response) => {
       ...job,
       company,
       company_website: company?.website || null,
-      company_career_page:
-        (company?.metadata?.career_page as string) ||
-        (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+      company_career_page: getCareerPageUrl(company),
       evaluation,
       contacts,
     },
@@ -663,9 +666,7 @@ v1Router.get('/contacts', (_req: Request, res: Response) => {
       company_name: company?.name || 'Company',
       company_domain: company?.domain || null,
       company_website: company?.website || null,
-      company_career_page:
-        (company?.metadata?.career_page as string) ||
-        (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+      company_career_page: getCareerPageUrl(company),
     };
   });
   res.json({ data: list });
@@ -694,9 +695,7 @@ v1Router.get('/outreach/drafts', (_req: Request, res: Response) => {
         job_title: job?.title || 'Engineering Role',
         job_apply_url: job?.apply_url || null,
         company_name: company?.name || 'Company',
-        company_career_page:
-          (company?.metadata?.career_page as string) ||
-          (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+        company_career_page: getCareerPageUrl(company),
         mailto_url: mailLinks.mailto_url,
         gmail_compose_url: mailLinks.gmail_compose_url,
       };
@@ -800,9 +799,7 @@ v1Router.get('/applications', (_req: Request, res: Response) => {
       company_name: company?.name || 'Company',
       company_id: company?.id || '',
       company_website: company?.website || null,
-      company_career_page:
-        (company?.metadata?.career_page as string) ||
-        (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+      company_career_page: getCareerPageUrl(company),
       score: evaluation?.score ?? null,
       history,
     };
@@ -1039,9 +1036,7 @@ v1Router.get('/monitoring/sources', (_req: Request, res: Response) => {
     return {
       ...s,
       company_name: company?.name || 'Company',
-      company_career_page:
-        (company?.metadata?.career_page as string) ||
-        (company?.website ? `${company.website.replace(/\/$/, '')}/careers` : null),
+      company_career_page: getCareerPageUrl(company),
       active_jobs_count: Array.from(dbStore.jobs.values()).filter(
         (j) => j.source_id === s.id && j.status === 'ACTIVE'
       ).length,

@@ -1,6 +1,6 @@
 # JobHunt OS — Developer Setup Guide
 
-**Phase:** Phase 0 (Foundation)
+**Phase:** Phases 0–10 (Complete End-to-End Implementation)
 
 ---
 
@@ -21,8 +21,14 @@
 npm install
 
 # (Optional) Install Python agent dependencies in a virtual environment
+# macOS / Linux:
 python3 -m venv .venv
 source .venv/bin/activate
+pip install -r services/agents/requirements.txt
+
+# Windows (PowerShell):
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r services/agents/requirements.txt
 ```
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, RefreshCw, ExternalLink, Check, AlertCircle, Plus, Briefcase, ArrowUpDown } from 'lucide-react';
+import { Search, RefreshCw, ExternalLink, Check, AlertCircle, Plus, Briefcase, ArrowUpDown, Loader2 } from 'lucide-react';
 import { decisionTone, formatSalary } from '../lib/ui.ts';
 
 type SortMode = 'score' | 'newest' | 'priority';
@@ -30,6 +30,7 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
   const [sortMode, setSortMode] = useState<SortMode>('score');
   const [selectedJobId, setSelectedJobId] = useState<string | null>(jobs[0]?.id || null);
   const [busyJobId, setBusyJobId] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<'save' | 'eval' | 'draft' | null>(null);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -76,6 +77,7 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
 
   const handleSave = async (jobId: string) => {
     setBusyJobId(jobId);
+    setBusyAction('save');
     setActionFeedback(null);
     setActionError(null);
     try {
@@ -85,11 +87,13 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
       setActionError(err.message || 'Could not save job.');
     } finally {
       setBusyJobId(null);
+      setBusyAction(null);
     }
   };
 
   const handleEvaluate = async (jobId: string) => {
     setBusyJobId(jobId);
+    setBusyAction('eval');
     setActionFeedback(null);
     setActionError(null);
     try {
@@ -99,15 +103,21 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
       setActionError(err.message || 'Re-evaluation failed.');
     } finally {
       setBusyJobId(null);
+      setBusyAction(null);
     }
   };
 
   const handleDraft = async (jobId: string, companyId: string) => {
+    setBusyJobId(jobId);
+    setBusyAction('draft');
     setActionError(null);
     try {
       await onCreateDraftForJob(jobId, companyId);
     } catch (err: any) {
       setActionError(err.message || 'Could not create outreach draft.');
+    } finally {
+      setBusyJobId(null);
+      setBusyAction(null);
     }
   };
 
@@ -436,10 +446,18 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
                       type="button"
                       disabled={busyJobId === selectedJob.id}
                       onClick={() => handleSave(selectedJob.id)}
-                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
                     >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Save to Pipeline</span>
+                      {busyJobId === selectedJob.id && busyAction === 'save' ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Plus className="w-3.5 h-3.5" />
+                      )}
+                      <span>
+                        {busyJobId === selectedJob.id && busyAction === 'save'
+                          ? 'Saving...'
+                          : 'Save to Pipeline'}
+                      </span>
                     </button>
                   )}
 
@@ -447,17 +465,32 @@ export const JobsAndEvaluatorView: React.FC<JobsAndEvaluatorProps> = ({
                     type="button"
                     disabled={busyJobId === selectedJob.id}
                     onClick={() => handleEvaluate(selectedJob.id)}
-                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0"
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
                   >
-                    Re-Evaluate
+                    {busyJobId === selectedJob.id && busyAction === 'eval' && (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    )}
+                    <span>
+                      {busyJobId === selectedJob.id && busyAction === 'eval'
+                        ? 'Evaluating...'
+                        : 'Re-Evaluate'}
+                    </span>
                   </button>
 
                   <button
                     type="button"
+                    disabled={busyJobId === selectedJob.id}
                     onClick={() => handleDraft(selectedJob.id, selectedJob.company_id)}
-                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0"
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
                   >
-                    Draft Outreach
+                    {busyJobId === selectedJob.id && busyAction === 'draft' && (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    )}
+                    <span>
+                      {busyJobId === selectedJob.id && busyAction === 'draft'
+                        ? 'Drafting...'
+                        : 'Draft Outreach'}
+                    </span>
                   </button>
                 </div>
               </div>
