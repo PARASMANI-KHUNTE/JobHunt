@@ -5,9 +5,15 @@ import { createApiApp } from './apps/api/src/app.ts';
 import { validateEnv } from './packages/config/src/env.ts';
 
 async function startServer() {
-  const envValidation = validateEnv();
-  const env = envValidation.data;
   const isProduction = process.env.NODE_ENV === 'production';
+  const runtimeEnv = isProduction
+    ? process.env
+    : {
+        JWT_SECRET: 'dev-jwt-secret-replace-in-production-min-32-chars',
+        ...process.env,
+      };
+  const envValidation = validateEnv(runtimeEnv);
+  const env = envValidation.data;
 
   // Fail closed: never boot with an invalid environment configuration
   if (!envValidation.success || !env) {

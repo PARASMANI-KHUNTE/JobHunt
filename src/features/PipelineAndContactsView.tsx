@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Check,
   Send,
@@ -74,6 +74,17 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
   const [editSubject, setEditSubject] = useState<string>(selectedDraft?.subject || '');
   const [editBody, setEditBody] = useState<string>(selectedDraft?.body || '');
 
+  useEffect(() => {
+    if (selectedDraft) {
+      setEditSubject(selectedDraft.subject || '');
+      setEditBody(selectedDraft.body || '');
+    } else {
+      setEditSubject('');
+      setEditBody('');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDraft?.id]);
+
   const handleSelectDraft = (d: any) => {
     setSelectedDraftId(d.id);
     setEditSubject(d.subject);
@@ -86,13 +97,6 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
     applications.find((a) => a.id === selectedAppId) || applications[0] || null;
 
   const handleTransition = async (appId: string, nextStatus: string) => {
-    const terminalStatuses = ['REJECTED', 'WITHDRAWN', 'GHOSTED', 'CLOSED'];
-    if (terminalStatuses.includes(nextStatus)) {
-      const confirmed = window.confirm(
-        `Are you sure you want to transition this application to "${nextStatus}"?`
-      );
-      if (!confirmed) return;
-    }
     setBusy(true);
     setFeedback(null);
     setErrorMsg(null);
@@ -140,10 +144,6 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
   };
 
   const handleDiscard = async (draftId: string) => {
-    const confirmed = window.confirm(
-      'Are you sure you want to discard this outreach draft? It will be removed from the active approval queue.'
-    );
-    if (!confirmed) return;
     setBusy(true);
     setFeedback(null);
     setErrorMsg(null);
@@ -548,10 +548,18 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/70">
-                  {contacts.map((ct) => {
-                    const companyJob =
-                      jobs.find((j) => j.company_id === ct.company_id) || jobs[0];
-                    return (
+                  {contacts.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-8 px-4 text-center text-slate-400">
+                        No company contacts discovered yet. Register companies first, then click
+                        &ldquo;Run Contact Finder&rdquo; above.
+                      </td>
+                    </tr>
+                  ) : (
+                    contacts.map((ct) => {
+                      const companyJob =
+                        jobs.find((j) => j.company_id === ct.company_id) || jobs[0];
+                      return (
                       <tr key={ct.id} className="hover:bg-slate-800/30">
                         <td className="py-3 px-4">
                           <div className="font-semibold text-white">{ct.name}</div>
@@ -618,7 +626,8 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                         </td>
                       </tr>
                     );
-                  })}
+                  })
+                  )}
                 </tbody>
               </table>
             </div>
@@ -633,41 +642,48 @@ export const PipelineAndContactsView: React.FC<PipelineAndContactsProps> = ({
                 </h3>
               </div>
               <div className="divide-y divide-slate-800/80">
-                {drafts.map((dr) => {
-                  const isSel = selectedDraft?.id === dr.id;
-                  return (
-                    <div
-                      key={dr.id}
-                      onClick={() => handleSelectDraft(dr)}
-                      className={`p-4 cursor-pointer transition-colors ${
-                        isSel ? 'bg-slate-800/70' : 'hover:bg-slate-800/30'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="text-xs font-semibold text-white">{dr.contact_name}</div>
-                          <div className="text-[11px] text-slate-400">
-                            {dr.company_name} · {dr.job_title}
+                {drafts.length === 0 ? (
+                  <p className="p-6 text-center text-xs text-slate-500">
+                    No outreach drafts yet. Click &ldquo;Generate Draft&rdquo; on a contact or
+                    &ldquo;Draft Outreach&rdquo; on a job opening.
+                  </p>
+                ) : (
+                  drafts.map((dr) => {
+                    const isSel = selectedDraft?.id === dr.id;
+                    return (
+                      <div
+                        key={dr.id}
+                        onClick={() => handleSelectDraft(dr)}
+                        className={`p-4 cursor-pointer transition-colors ${
+                          isSel ? 'bg-slate-800/70' : 'hover:bg-slate-800/30'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="text-xs font-semibold text-white">{dr.contact_name}</div>
+                            <div className="text-[11px] text-slate-400">
+                              {dr.company_name} · {dr.job_title}
+                            </div>
                           </div>
+                          <span
+                            className={`text-[11px] font-mono font-semibold ${
+                              dr.status === 'SENT'
+                                ? 'text-emerald-400'
+                                : dr.status === 'APPROVED'
+                                ? 'text-cyan-400'
+                                : dr.status === 'DISCARDED'
+                                ? 'text-slate-600'
+                                : 'text-amber-400'
+                            }`}
+                          >
+                            {dr.status}
+                          </span>
                         </div>
-                        <span
-                          className={`text-[11px] font-mono font-semibold ${
-                            dr.status === 'SENT'
-                              ? 'text-emerald-400'
-                              : dr.status === 'APPROVED'
-                              ? 'text-cyan-400'
-                              : dr.status === 'DISCARDED'
-                              ? 'text-slate-600'
-                              : 'text-amber-400'
-                          }`}
-                        >
-                          {dr.status}
-                        </span>
+                        <p className="text-xs text-slate-300 truncate mt-1.5">{dr.subject}</p>
                       </div>
-                      <p className="text-xs text-slate-300 truncate mt-1.5">{dr.subject}</p>
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                )}
               </div>
             </div>
 

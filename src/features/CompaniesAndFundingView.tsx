@@ -26,6 +26,7 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
   const [name, setName] = useState('');
   const [website, setWebsite] = useState('');
   const [careerPage, setCareerPage] = useState('');
+  const [atsProvider, setAtsProvider] = useState('AUTO');
   const [countryCode, setCountryCode] = useState('IN');
   const [headquarters, setHeadquarters] = useState('');
   const [industry, setIndustry] = useState('Developer Tools & Cloud');
@@ -59,6 +60,7 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
         name: name.trim(),
         website: website.trim() || null,
         career_page: careerPage.trim() || null,
+        ...(atsProvider !== 'AUTO' ? { ats_provider: atsProvider } : {}),
         country_code: countryCode,
         headquarters: headquarters.trim() || null,
         industry,
@@ -69,6 +71,7 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
       setName('');
       setWebsite('');
       setCareerPage('');
+      setAtsProvider('AUTO');
       setHeadquarters('');
       setShowAddForm(false);
       setFeedback(
@@ -228,14 +231,27 @@ export const CompaniesAndFundingView: React.FC<CompaniesAndFundingProps> = ({
               />
             </div>
             <div>
-              <label className="block text-slate-300 mb-1 font-medium">Careers Page URL</label>
+              <label className="block text-slate-300 mb-1 font-medium">Careers / ATS Board URL</label>
               <input
                 type="url"
                 value={careerPage}
                 onChange={(e) => setCareerPage(e.target.value)}
-                placeholder="https://retool.com/careers"
+                placeholder="https://boards.greenhouse.io/retool"
                 className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 font-mono"
               />
+            </div>
+            <div>
+              <label className="block text-slate-300 mb-1 font-medium">ATS Provider</label>
+              <select
+                value={atsProvider}
+                onChange={(e) => setAtsProvider(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-100"
+              >
+                <option value="AUTO">Auto-detect from URL / Probe</option>
+                <option value="GREENHOUSE">GREENHOUSE</option>
+                <option value="ASHBY">ASHBY</option>
+                <option value="LEVER">LEVER</option>
+              </select>
             </div>
             <div>
               <label className="block text-slate-300 mb-1 font-medium">Country Code</label>

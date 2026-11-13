@@ -65,30 +65,33 @@ export const ProfileAndAgentsView: React.FC<ProfileAndAgentsProps> = ({
   onParseResume,
   onApplyResume,
 }) => {
-  const [fullName, setFullName] = useState(profile?.full_name || 'Paras Manikhunte');
+  const [fullName, setFullName] = useState(profile?.full_name || '');
   const [headline, setHeadline] = useState(profile?.headline || '');
-  const [expYears, setExpYears] = useState(String(profile?.experience_years ?? 1.5));
+  const [expYears, setExpYears] = useState(String(profile?.experience_years ?? 0));
   const [resumeText, setResumeText] = useState(profile?.resume_text || '');
   const [remoteOnly, setRemoteOnly] = useState<boolean>(
-    profile?.preferences?.remote_only ?? true
+    profile?.preferences?.remote_only ?? false
   );
   const [minSalary, setMinSalary] = useState(
-    String(profile?.preferences?.minimum_salary ?? 700000)
+    String(profile?.preferences?.minimum_salary ?? 0)
   );
   const [maxExp, setMaxExp] = useState(
-    String(profile?.preferences?.maximum_experience ?? 2)
+    String(profile?.preferences?.maximum_experience ?? 99)
   );
 
-  // Re-sync form fields whenever the profile version changes (e.g. after a
+  // Re-sync form fields whenever the profile loads or its version changes (e.g. after a
   // resume import or an external update) so the form never shows stale data.
   const profileVersion = profile?.profile_version ?? 1;
   useEffect(() => {
-    setFullName(profile?.full_name || 'Paras Manikhunte');
+    setFullName(profile?.full_name || '');
     setHeadline(profile?.headline || '');
-    setExpYears(String(profile?.experience_years ?? 1.5));
+    setExpYears(String(profile?.experience_years ?? 0));
     setResumeText(profile?.resume_text || '');
+    setRemoteOnly(profile?.preferences?.remote_only ?? false);
+    setMinSalary(String(profile?.preferences?.minimum_salary ?? 0));
+    setMaxExp(String(profile?.preferences?.maximum_experience ?? 99));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profileVersion]);
+  }, [profileVersion, profile?.id]);
 
   // New skill input
   const [newSkillName, setNewSkillName] = useState('');
@@ -270,8 +273,6 @@ export const ProfileAndAgentsView: React.FC<ProfileAndAgentsProps> = ({
   };
 
   const handleDeleteSkill = async (skillId: string, skillName: string) => {
-    if (!window.confirm(`Remove skill "${skillName}" from your profile? Active jobs will be re-scored.`))
-      return;
     setBusy(true);
     setFeedback(null);
     setErrorMsg(null);
@@ -755,6 +756,7 @@ export const ProfileAndAgentsView: React.FC<ProfileAndAgentsProps> = ({
                 <input
                   type="text"
                   required
+                  placeholder="Your full name"
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-100"

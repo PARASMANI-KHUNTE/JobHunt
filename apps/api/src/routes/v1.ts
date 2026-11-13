@@ -3,7 +3,8 @@ import crypto from 'node:crypto';
 import { dbStore } from '../database/store.ts';
 import { isSafeExternalUrl, getCompanyCareerPage, getCareerPageUrl } from '../services/coreEngine.ts';
 import { buildMailClientLinks } from '../services/mailer.ts';
-import { ApplicationStatus } from '../../../../packages/contracts/src/index.ts';
+import { probeLiveCompanyAts } from '../services/atsLiveAdapter.ts';
+import { ApplicationStatus, AtsProvider } from '../../../../packages/contracts/src/index.ts';
 
 export const v1Router = Router();
 
@@ -394,6 +395,8 @@ v1Router.post('/companies', (req: Request, res: Response) => {
       name,
       website,
       career_page,
+      ats_provider,
+      ats_api_url,
       country_code,
       headquarters,
       industry,
@@ -423,9 +426,19 @@ v1Router.post('/companies', (req: Request, res: Response) => {
       }
     }
 
+    if (ats_api_url) {
+      const checkAts = isSafeExternalUrl(String(ats_api_url));
+      if (!checkAts.safe) {
+        return sendError(res, 400, 'SSRF_BLOCKED', checkAts.reason || 'Unsafe ATS API URL');
+      }
+    }
+
     const { company, created } = dbStore.upsertCompanyWithDeduplication({
       name: String(name),
       website: website || null,
+      career_page: career_page ? String(career_page).trim() : null,
+      ats_provider: (ats_provider as AtsProvider | undefined) || undefined,
+      ats_api_url: ats_api_url ? String(ats_api_url).trim() : null,
       country_code: country_code || 'IN',
       headquarters: headquarters || null,
       industry: industry || 'Software & Technology',
@@ -433,14 +446,6 @@ v1Router.post('/companies', (req: Request, res: Response) => {
       employee_count: employee_count ? Number(employee_count) : null,
       source_evidence_url: source_url || website || 'https://techcrunch.com/category/startups/',
     });
-
-    if (career_page) {
-      company.metadata = {
-        ...company.metadata,
-        career_page: String(career_page).trim(),
-      };
-      dbStore.companies.set(company.id, company);
-    }
 
     if (round_type && round_type !== 'UNKNOWN') {
       dbStore.addFundingRoundIfNew({
@@ -499,6 +504,24 @@ v1Router.post('/companies/:id/investigate', async (req: Request, res: Response) 
   try {
     const company = dbStore.companies.get(req.params.id);
     if (!company) return sendError(res, 404, 'NOT_FOUND', 'Company not found');
+
+    // If ATS provider is not yet known from the URL and domain is not a synthetic test domain,
+    // probe public Greenhouse / Ashby / Lever boards by company slug for real ATS discovery.
+    const currentAts = company.metadata?.ats_provider || 'UNKNOWN';
+    const isTestDomain = Boolean(company.domain && company.domain.endsWith('.example.com'));
+    if (currentAts === 'UNKNOWN' && !isTestDomain) {
+      const slug = company.normalized_name || company.domain?.split('.')[0] || '';
+      const probed = await probeLiveCompanyAts(slug);
+      if (probed) {
+        company.metadata = {
+          ...company.metadata,
+          ats_provider: probed.atsProvider,
+          career_page: company.metadata?.career_page || probed.careerUrl,
+        };
+        dbStore.companies.set(company.id, company);
+      }
+    }
+
     const run = await dbStore.triggerAgentRun('company-investigator', { company_id: company.id });
     res.status(202).json({
       data: {

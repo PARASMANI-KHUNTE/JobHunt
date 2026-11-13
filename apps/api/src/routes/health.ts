@@ -5,11 +5,20 @@ export const healthRouter = Router();
 
 const startTime = Date.now();
 
+function getRuntimeEnv(): Record<string, string | undefined> {
+  return process.env.NODE_ENV === 'production'
+    ? process.env
+    : {
+        JWT_SECRET: 'dev-jwt-secret-replace-in-production-min-32-chars',
+        ...process.env,
+      };
+}
+
 /**
  * Health check endpoint for container orchestrators, load balancers, and monitoring.
  */
 healthRouter.get(['/', '/v1/health', '/health'], (req: Request, res: Response) => {
-  const envValidation = validateEnv();
+  const envValidation = validateEnv(getRuntimeEnv());
   const uptimeSeconds = Math.floor((Date.now() - startTime) / 1000);
 
   const status = envValidation.success ? 'healthy' : 'degraded';
@@ -41,7 +50,7 @@ healthRouter.get(['/', '/v1/health', '/health'], (req: Request, res: Response) =
  * Detailed system status endpoint showing Phase 0 readiness, monorepo topology, and active configurations.
  */
 healthRouter.get('/v1/system/status', (req: Request, res: Response) => {
-  const envValidation = validateEnv();
+  const envValidation = validateEnv(getRuntimeEnv());
   const envData = envValidation.data;
 
   res.json({

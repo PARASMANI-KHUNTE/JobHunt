@@ -1678,6 +1678,13 @@ export class JobHuntStore {
   private async executeOutreachAssistantAgent(payload: Record<string, any>): Promise<Record<string, any>> {
     const contactId = payload.contact_id || Array.from(this.contacts.keys())[0];
     const jobId = payload.job_id || Array.from(this.jobs.keys())[0];
+    if (!payload.contact_id && !payload.job_id && (!contactId || !jobId)) {
+      return {
+        draft_id: null,
+        status: 'SKIPPED',
+        reason: 'No contacts or jobs available yet — run Contact Finder and Job Hunter first',
+      };
+    }
     const draft = this.createOutreachDraft({
       contact_id: contactId,
       job_id: jobId,

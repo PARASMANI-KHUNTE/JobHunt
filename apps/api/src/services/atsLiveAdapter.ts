@@ -264,3 +264,65 @@ export async function fetchLiveJobsFromAts(
     clearTimeout(timeout);
   }
 }
+
+/**
+ * Probes public Greenhouse, Ashby, and Lever board APIs for a given company slug
+ * to auto-discover an authorized ATS endpoint when only a generic website/career URL is known.
+ */
+export async function probeLiveCompanyAts(
+  slug: string
+): Promise<{ atsProvider: 'GREENHOUSE' | 'ASHBY' | 'LEVER'; apiUrl: string; careerUrl: string } | null> {
+  const cleanSlug = slug.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+  if (!cleanSlug) return null;
+
+  const candidates: Array<{
+    atsProvider: 'GREENHOUSE' | 'ASHBY' | 'LEVER';
+    apiUrl: string;
+    careerUrl: string;
+    validate: (data: any) => boolean;
+  }> = [
+    {
+      atsProvider: 'GREENHOUSE',
+      apiUrl: `https://boards-api.greenhouse.io/v1/boards/${cleanSlug}/jobs`,
+      careerUrl: `https://boards.greenhouse.io/${cleanSlug}`,
+      validate: (data) => Array.isArray(data?.jobs),
+    },
+    {
+      atsProvider: 'ASHBY',
+      apiUrl: `https://api.ashbyhq.com/posting-api/job-board/${cleanSlug}`,
+      careerUrl: `https://jobs.ashbyhq.com/${cleanSlug}`,
+      validate: (data) => Array.isArray(data?.jobs),
+    },
+    {
+      atsProvider: 'LEVER',
+      apiUrl: `https://api.lever.co/v0/postings/${cleanSlug}`,
+      careerUrl: `https://jobs.lever.co/${cleanSlug}`,
+      validate: (data) => Array.isArray(data),
+    },
+  ];
+
+  for (const cand of candidates) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    try {
+      const res = await fetch(cand.apiUrl, { signal: controller.signal });
+      if (res.ok) {
+        const data = await res.json();
+        if (cand.validate(data)) {
+          return {
+            atsProvider: cand.atsProvider,
+            apiUrl: cand.apiUrl,
+            careerUrl: cand.careerUrl,
+          };
+        }
+      }
+    } catch {
+      // Probe miss or timeout — try next candidate
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return null;
+}
+
