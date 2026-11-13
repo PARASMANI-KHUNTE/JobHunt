@@ -35,6 +35,7 @@ import {
   evaluateJobAgainstProfile,
   validateApplicationStatusTransition,
   sanitizeUntrustedText,
+  getCompanyCareerPage,
 } from '../services/coreEngine.ts';
 import { fetchLiveJobsFromAts } from '../services/atsLiveAdapter.ts';
 import {
@@ -144,16 +145,48 @@ export class JobHuntStore {
 
   public updateProfile(
     userId: string,
-    updates: Partial<Pick<CandidateProfileRecord, 'full_name' | 'headline' | 'summary' | 'experience_years' | 'resume_url' | 'resume_text' | 'preferences' | 'work_experience' | 'education'>>
+    updates: Partial<Pick<CandidateProfileRecord, 'full_name' | 'headline' | 'summary' | 'experience_years' | 'resume_url' | 'resume_text' | 'preferences' | 'work_experience' | 'education'>>,
+    options: { forceBumpVersion?: boolean } = {}
   ): CandidateProfileRecord {
     const existing = this.getProfile(userId);
+
+    const mergedPreferences = updates.preferences
+      ? { ...existing.preferences, ...updates.preferences }
+      : existing.preferences;
+
+    let hasChanges = Boolean(options.forceBumpVersion);
+    if (!hasChanges) {
+      if (updates.full_name !== undefined && updates.full_name !== existing.full_name) hasChanges = true;
+      if (updates.headline !== undefined && updates.headline !== existing.headline) hasChanges = true;
+      if (updates.summary !== undefined && updates.summary !== existing.summary) hasChanges = true;
+      if (updates.experience_years !== undefined && updates.experience_years !== existing.experience_years) hasChanges = true;
+      if (updates.resume_url !== undefined && updates.resume_url !== existing.resume_url) hasChanges = true;
+      if (updates.resume_text !== undefined && updates.resume_text !== existing.resume_text) hasChanges = true;
+      if (updates.work_experience !== undefined && JSON.stringify(updates.work_experience) !== JSON.stringify(existing.work_experience)) hasChanges = true;
+      if (updates.education !== undefined && JSON.stringify(updates.education) !== JSON.stringify(existing.education)) hasChanges = true;
+      if (updates.preferences !== undefined && JSON.stringify(mergedPreferences) !== JSON.stringify(existing.preferences)) hasChanges = true;
+    }
+
+    if (!hasChanges) {
+      return existing;
+    }
+
     const updated: CandidateProfileRecord = {
       ...existing,
       ...updates,
-      preferences: updates.preferences
-        ? { ...existing.preferences, ...updates.preferences }
-        : existing.preferences,
+      preferences: mergedPreferences,
       profile_version: existing.profile_version + 1,
+      updated_at: new Date().toISOString(),
+    };
+    this.profiles.set(updated.id, updated);
+    return updated;
+  }
+
+  public bumpProfileVersion(profileId: string = this.defaultProfileId): CandidateProfileRecord {
+    const profile = this.profiles.get(profileId) || this.getProfile(this.defaultUserId);
+    const updated: CandidateProfileRecord = {
+      ...profile,
+      profile_version: profile.profile_version + 1,
       updated_at: new Date().toISOString(),
     };
     this.profiles.set(updated.id, updated);
@@ -342,8 +375,7 @@ export class JobHuntStore {
     const detectedAts =
       input.ats_provider ||
       detectAtsProviderFromUrl(input.ats_api_url || input.career_page || input.website);
-    const defaultCareerPage =
-      input.career_page || (input.website ? `${input.website.replace(/\/$/, '')}/careers` : null);
+    const defaultCareerPage = input.career_page || getCompanyCareerPage(input);
 
     const created: CompanyRecord = {
       id: crypto.randomUUID(),
@@ -448,11 +480,21 @@ export class JobHuntStore {
     return { round: record, created: true };
   }
 
+  public getFundingRoundsForCompany(companyId: string): FundingRoundRecord[] {
+    return Array.from(this.fundingRounds.values())
+      .filter((r) => r.company_id === companyId)
+      .sort((a, b) => {
+        const timeA = new Date(a.publication_date || a.announcement_date || 0).getTime();
+        const timeB = new Date(b.publication_date || b.announcement_date || 0).getTime();
+        return timeB - timeA;
+      });
+  }
+
   public recomputeCompanyPriority(companyId: string): CompanyRecord | null {
     const company = this.companies.get(companyId);
     if (!company) return null;
 
-    const rounds = Array.from(this.fundingRounds.values()).filter((r) => r.company_id === companyId);
+    const rounds = this.getFundingRoundsForCompany(companyId);
     const latestRound = rounds[0];
     const stage: FundingStage = latestRound ? latestRound.round_type : 'UNKNOWN';
 
@@ -873,7 +915,7 @@ export class JobHuntStore {
     }
 
     const company = this.companies.get(job.company_id);
-    const rounds = Array.from(this.fundingRounds.values()).filter((r) => r.company_id === job.company_id);
+    const rounds = this.getFundingRoundsForCompany(job.company_id);
     const latestRound = rounds[0];
     const skills = this.getSkills(profileId).slice(0, 4).map((s) => s.skill_name);
 
@@ -1019,9 +1061,9 @@ export class JobHuntStore {
       this.sentIdempotencyKeys.set(idempotencyKey, draftId);
     }
 
-    // Trigger real async provider dispatch if RESEND_API_KEY / SENDGRID_API_KEY / SMTP_WEBHOOK_URL is set
+    // Background dispatch: trigger real provider dispatch asynchronously if configured
     if (process.env.NODE_ENV !== 'test') {
-      dispatchApprovedEmail({
+      void dispatchApprovedEmail({
         to: contact.email,
         subject: draft.subject,
         body: draft.body,
@@ -1314,8 +1356,7 @@ export class JobHuntStore {
           : 'GREENHOUSE';
 
       const careerUrl =
-        comp.metadata?.career_page ||
-        (comp.website ? `${comp.website.replace(/\/$/, '')}/careers` : `https://boards.greenhouse.io/${slug}`);
+        getCompanyCareerPage(comp) || `https://boards.greenhouse.io/${slug}`;
 
       comp.investigation_status = 'COMPLETED';
       comp.last_researched_at = new Date().toISOString();
@@ -1491,21 +1532,21 @@ export class JobHuntStore {
       if (existingForCompany.length > 0) continue;
 
       const domain = comp.domain || 'company.com';
-      const careerUrl = comp.metadata?.career_page || `https://${domain}/careers`;
+      const careerUrl = getCompanyCareerPage(comp) || `https://${domain}/careers`;
       const newContact: ContactRecord = {
         id: crypto.randomUUID(),
         company_id: comp.id,
         name: `${comp.name} Technical Recruiting`,
         designation: 'Technical Talent Acquisition',
         email: `careers@${domain}`,
-        email_status: 'PUBLICLY_LISTED',
+        email_status: 'NOT_FOUND',
         email_source_url: careerUrl,
         linkedin_url: `https://www.linkedin.com/company/${comp.normalized_name}`,
         other_profile_url: null,
         metadata: {
           priority_rank: 1,
           role_category: 'Technical Recruiter',
-          provenance_note: `Publicly listed talent acquisition contact on ${careerUrl}`,
+          provenance_note: 'Synthesized generic contact — verify manually',
         },
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),

@@ -16,7 +16,7 @@ jobs:
         image: postgres:16-alpine
         env:
           POSTGRES_USER: jobhunt
-          POSTGRES_PASSWORD: jobhunt_dev_pwd
+          POSTGRES_PASSWORD: ${{ secrets.CI_POSTGRES_PASSWORD || 'ci-test-secure-placeholder-pw' }}
           POSTGRES_DB: jobhunt_os
         ports:
           - 5432:5432
@@ -60,14 +60,14 @@ jobs:
       - name: Run Node.js & TypeScript Test Suite
         env:
           NODE_ENV: test
-          DATABASE_URL: postgresql://jobhunt:jobhunt_dev_pwd@localhost:5432/jobhunt_os
+          DATABASE_URL: postgresql://jobhunt:${{ secrets.CI_POSTGRES_PASSWORD || 'ci-test-secure-placeholder-pw' }}@localhost:5432/jobhunt_os
           REDIS_URL: redis://localhost:6379/0
-          JWT_SECRET: dev-jwt-secret-replace-in-production-min-32-chars
+          JWT_SECRET: ${{ secrets.CI_JWT_SECRET || 'ci-test-jwt-secret-minimum-32-chars-long' }}
         run: npm test
 
       - name: Run Python Worker Tests & Health Check
         env:
-          DATABASE_URL: postgresql://jobhunt:jobhunt_dev_pwd@localhost:5432/jobhunt_os
+          DATABASE_URL: postgresql://jobhunt:${{ secrets.CI_POSTGRES_PASSWORD || 'ci-test-secure-placeholder-pw' }}@localhost:5432/jobhunt_os
           REDIS_URL: redis://localhost:6379/0
         run: |
           npm run test:python

@@ -23,6 +23,10 @@ export function createApiApp(): Express {
     next();
   });
 
+  // SECURITY NOTE / TODO: Add rate limiting middleware (e.g., express-rate-limit with a
+  // Redis store) to protect endpoints against brute-force attacks, credential stuffing on
+  // /auth/*, and resource exhaustion on CPU/network-heavy routes (/profile/resume/parse, /jobs/poll-live).
+
   // Correlation Request ID and Structured Logging Middleware (Phase 10)
   app.use((req: Request, res: Response, next: NextFunction) => {
     // Only accept sanitized request IDs to prevent log injection via forged headers

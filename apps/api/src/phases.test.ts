@@ -8,6 +8,7 @@ import {
   sanitizeUntrustedText,
   calculateCompanyPriority,
   evaluateJobAgainstProfile,
+  getCompanyCareerPage,
 } from './services/coreEngine.ts';
 import { createApiApp } from './app.ts';
 
@@ -40,10 +41,20 @@ test('Phase 1: Candidate profile increments version on update and rejects duplic
   const initial = store.getProfile();
   assert.equal(initial.profile_version, 1);
 
+  // Empty or unchanged update does NOT bump version
+  const noop = store.updateProfile(store.defaultUserId, {});
+  assert.equal(noop.profile_version, 1);
+
   const updated = store.updateProfile(store.defaultUserId, {
     headline: 'Senior Backend & Systems Engineer',
   });
   assert.equal(updated.profile_version, 2);
+
+  // Repeated identical update does NOT bump version
+  const same = store.updateProfile(store.defaultUserId, {
+    headline: 'Senior Backend & Systems Engineer',
+  });
+  assert.equal(same.profile_version, 2);
 
   store.addCandidateSkill(initial.id, 'Node.js', 'ADVANCED', 2);
   assert.throws(() => {
@@ -102,6 +113,22 @@ test('Phase 2 & 3: Funding events preserve distinct announcement/publication dat
     source_url: 'https://techlabs.in/news/series-a',
   });
   assert.equal(dupRound.created, false);
+
+  // Add an earlier Seed round after Series A, ensuring sorting by publication_date DESC works
+  store.addFundingRoundIfNew({
+    company_id: company.id,
+    round_type: 'SEED',
+    publication_date: '2025-01-15',
+    source_url: 'https://techlabs.in/news/seed',
+  });
+  const sortedRounds = store.getFundingRoundsForCompany(company.id);
+  assert.equal(sortedRounds[0].round_type, 'SERIES_A');
+  assert.equal(sortedRounds[1].round_type, 'SEED');
+
+  // Verify getCompanyCareerPage helper
+  assert.equal(getCompanyCareerPage({ website: 'https://acme.inc' }), 'https://acme.inc/careers');
+  assert.equal(getCompanyCareerPage({ metadata: { career_page: 'https://boards.greenhouse.io/acme' } }), 'https://boards.greenhouse.io/acme');
+  assert.equal(getCompanyCareerPage(null), null);
 
   const p1 = calculateCompanyPriority({
     fundingStage: 'SERIES_A',

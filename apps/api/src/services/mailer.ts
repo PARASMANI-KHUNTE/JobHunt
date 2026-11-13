@@ -37,11 +37,14 @@ export function buildMailClientLinks(to: string, subject: string, body: string):
  */
 export async function dispatchApprovedEmail(req: OutboundEmailRequest): Promise<OutboundEmailResult> {
   const { mailto_url, gmail_compose_url } = buildMailClientLinks(req.to, req.subject, req.body);
-  const fromEmail = process.env.OUTREACH_FROM_EMAIL || 'parasmanikhunte@gmail.com';
+  const fromEmail = req.from || process.env.OUTREACH_FROM_EMAIL || '';
 
   // 1. Live Resend API Provider (if RESEND_API_KEY is configured in .env)
   const resendKey = process.env.RESEND_API_KEY;
   if (resendKey && resendKey.trim().length > 5) {
+    if (!fromEmail) {
+      throw new Error('CONFIG_ERROR: OUTREACH_FROM_EMAIL must be configured to send via Resend');
+    }
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
@@ -76,6 +79,9 @@ export async function dispatchApprovedEmail(req: OutboundEmailRequest): Promise<
   // 2. Live SendGrid API Provider (if SENDGRID_API_KEY is configured in .env)
   const sendgridKey = process.env.SENDGRID_API_KEY;
   if (sendgridKey && sendgridKey.trim().length > 5) {
+    if (!fromEmail) {
+      throw new Error('CONFIG_ERROR: OUTREACH_FROM_EMAIL must be configured to send via SendGrid');
+    }
     const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
       method: 'POST',
       headers: {
